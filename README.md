@@ -10,8 +10,6 @@
 
 ---
 
-> [!IMPORTANT]
-> **Project status:** this README describes the intended design and roadmap. Do not assume a feature is implemented until it exists in the repository and has been tested. Roadmap checkboxes should be kept in sync with what is actually working.
 
 ## ⚡ Overview
 
