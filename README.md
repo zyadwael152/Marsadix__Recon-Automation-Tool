@@ -245,8 +245,11 @@ The project is not intended to exploit vulnerabilities or access data without pe
 
 <div align="center">
 
+<img src="https://capsule-render.vercel.app/api?type=waving&height=120&section=footer&color=0:16A6A1,100:081A2F" width="100%" alt="Decorative footer" />
+
+### **Marsadix**
 **Recon smarter. Verify safely. Track every change.**
 
-Open-source security tooling · Scope-aware by design · Evidence-driven assessments
+<sub>Open-source security tooling · Scope-aware by design · Evidence-driven assessments</sub>
 
 </div>
