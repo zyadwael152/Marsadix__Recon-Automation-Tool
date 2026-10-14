@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="https://capsule-render.vercel.app/api?type=waving&height=220&color=0:081A2F,50:123B5D,100:16A6A1&text=MARSADIX&fontColor=FFFFFF&fontSize=58&fontAlignY=38&desc=Recon%20smarter.%20Verify%20safely.%20Track%20every%20change.&descAlignY=58&descSize=16" width="100%" alt="Marsadix banner" />
+
 <img src="assets/marsadix_logo.png" alt="Marsadix - Recon & Vuln Engine" width="460">
 
 ### An authorization-first reconnaissance, vulnerability-correlation and CVE-monitoring command-line tool
