@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "marsadix"
+version = "0.1.0"
+description = "Recon, ASM and CVE monitoring"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []          # add real dependencies here (e.g. "requests", "jinja2")
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+marsadix = "marsadix.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["marsadix*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

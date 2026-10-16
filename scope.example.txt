@@ -1,0 +1,14 @@
+# Copy to scope.txt and edit. One rule per line.
+#
+#   example.com              exactly this host
+#   *.example.com            any subdomain, any depth (not example.com itself)
+#   203.0.113.0/24           IP range (or a single IP)
+#   !mail.example.com        EXCLUDE exactly this host
+#   !*.internal.example.com  EXCLUDE all subdomains under it
+#
+# Exclusions always win. Anything that matches no rule is out of scope.
+
+example.com
+*.example.com
+!mail.example.com
+!*.internal.example.com

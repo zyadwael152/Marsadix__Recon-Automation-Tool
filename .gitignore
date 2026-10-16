@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.db
+.venv/
+.env
+output/
+*.egg-info/
+.pytest_cache/
+scope.txt

@@ -1,0 +1,6 @@
+# Copy to config.toml. Secrets do NOT go here (use .env).
+db_path = "marsadix.db"
+output_dir = "output"
+max_depth = 2        # recursion depth limit
+rate_limit = 50      # requests per second passed to the tools
+tool_timeout = 600   # seconds per external tool
