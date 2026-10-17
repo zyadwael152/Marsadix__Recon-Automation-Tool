@@ -25,6 +25,7 @@ import sys
 from typing import Optional, Sequence
 
 from . import db
+from .core.banner import print_banner
 from .core.config import Config, ConfigError, load_config
 from .core.loader import load_callable
 from .core.log import setup_logging
@@ -43,7 +44,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-v", "--verbose", action="store_true", help="debug logging")
     p.add_argument("--config", metavar="FILE", help="path to config.toml")
     p.add_argument("--db", metavar="FILE", help="SQLite file (overrides config)")
-    sub = p.add_subparsers(dest="command", required=True)
+    p.add_argument("--no-banner", action="store_true", help="do not print the startup banner")
+    sub = p.add_subparsers(dest="command")
 
     s = sub.add_parser("scan", help="run recon + ASM on a target")
     s.add_argument("target", help="root domain, e.g. example.com")
@@ -168,7 +170,13 @@ COMMANDS = {"scan": cmd_scan, "monitor": cmd_monitor, "diff": cmd_diff,
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if not args.no_banner:
+        print_banner()
+    if not args.command:                      # plain `marsadix`: banner + help
+        parser.print_help()
+        return 0
     setup_logging(args.verbose)
     try:
         cfg = load_config(args.config)
