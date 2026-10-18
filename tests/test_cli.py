@@ -81,10 +81,19 @@ def test_scan_rejects_invalid_mode(tmp_path, capsys):
     assert exc.value.code == 2  # argparse's own validation
 
 
-def test_graph_not_implemented_yet(tmp_path, capsys):
+def test_graph_needs_a_scan(tmp_path, capsys):
     dbp = str(tmp_path / "t.db")
-    assert main(["--db", dbp, "graph", "example.com"]) == 3
-    assert "not implemented yet" in capsys.readouterr().err
+    assert main(["--db", dbp, "graph", "example.com"]) == 1
+    assert "no scans found" in capsys.readouterr().err
+
+
+def test_graph_runs_after_a_scan(tmp_path, capsys):
+    dbp = str(tmp_path / "t.db")
+    main(["--db", dbp, "scan", "example.com"])
+    capsys.readouterr()
+    assert main(["--db", dbp, "graph", "example.com"]) == 0
+    out = capsys.readouterr().out
+    assert "Knowledge Graph for example.com" in out
 
 
 def test_diff_needs_two_scans(tmp_path, capsys):
