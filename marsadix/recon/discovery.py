@@ -30,6 +30,14 @@ async def run_cli_tool(tool_name: str, command: List[str]) -> Tuple[str, Set[str
     
     return tool_name, subdomains
 
+async def run_chaos(domain: str, api_key: str = None) -> Tuple[str, Set[str]]:
+    # chaos needs a ProjectDiscovery API key - skip gracefully instead of
+    # letting it fail with a confusing subprocess error, same as VirusTotal.
+    if not api_key:
+        logger.info("[-] Skipped chaos (No API Key provided).")
+        return "chaos", set()
+    return await run_cli_tool("chaos", ["chaos", "-d", domain, "-key", api_key, "-silent"])
+
 async def fetch_crtsh(domain: str) -> Tuple[str, Set[str]]:
     subdomains = set()
     url = f"https://crt.sh/?q=%25.{domain}&output=json"
@@ -58,10 +66,14 @@ async def _async_discover(domain: str, api_keys: dict = None) -> Dict[str, List[
         api_keys = {}
         
     vt_key = api_keys.get("virustotal")
+    chaos_key = api_keys.get("chaos")
     
     tasks = [
         run_cli_tool("subfinder", ["subfinder", "-d", domain, "-silent"]),
         run_cli_tool("assetfinder", ["assetfinder", "--subs-only", domain]),
+        run_cli_tool("amass", ["amass", "enum", "-passive", "-d", domain, "-silent"]),
+        run_cli_tool("findomain", ["findomain", "-t", domain, "-q"]),
+        run_chaos(domain, chaos_key),
         fetch_crtsh(domain),
         fetch_alienvault(domain),
         fetch_virustotal(domain, vt_key)
