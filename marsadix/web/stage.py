@@ -7,44 +7,58 @@ logger = logging.getLogger(__name__)
 def run(ctx, *args, **kwargs) -> dict:
     logger.info("=== Starting Web stage ===")
     
-    # === سطور الاستكشاف لمعرفة مكان حفظ البيانات ===
-    logger.info(f"[DEBUG] ctx attributes: {dir(ctx)}")
-    logger.info(f"[DEBUG] kwargs keys: {list(kwargs.keys())}")
-    if hasattr(ctx, 'results'):
-        logger.info(f"[DEBUG] ctx.results keys: {list(ctx.results.keys())}")
-    if hasattr(ctx, 'state'):
-        logger.info(f"[DEBUG] ctx.state keys: {list(ctx.state.keys())}")
-    # ===============================================
-
-    recon_data = {}
+    subdomains = set()
     
-    # محاولة الاستخراج الموسعة
-    if "recon" in kwargs:
-        recon_data = kwargs["recon"]
-    elif hasattr(ctx, "results") and "recon" in ctx.results:
-        recon_data = ctx.results["recon"]
-    elif hasattr(ctx, "state") and "recon" in ctx.state:
-        recon_data = ctx.state["recon"]
-    elif hasattr(ctx, "data") and "recon" in ctx.data:
-        recon_data = ctx.data["recon"]
+    # استخراج النطاقات من قاعدة بيانات الأداة SQLite (ctx.conn)
+    if hasattr(ctx, 'conn'):
+        try:
+            cur = ctx.conn.cursor()
+            # 1. البحث عن اسم الجدول (assets أو nodes)
+            cur.execute("SELECT name FROM sqlite_schema WHERE type='table'")
+            tables = [r[0] for r in cur.fetchall()]
+            
+            target_table = None
+            for t in ['assets', 'nodes', 'subdomains', 'recon']:
+                if t in tables:
+                    target_table = t
+                    break
+                    
+            if target_table:
+                # 2. معرفة اسم العمود اللي متخزن فيه النطاق
+                cur.execute(f"PRAGMA table_info({target_table})")
+                columns = [c[1] for c in cur.fetchall()]
+                
+                col_name = None
+                for candidate in ['name', 'domain', 'host', 'asset', 'subdomain']:
+                    if candidate in columns:
+                        col_name = candidate
+                        break
+                        
+                # 3. سحب النطاقات
+                if col_name:
+                    if 'scan_id' in columns and hasattr(ctx, 'scan'):
+                        scan_id = getattr(ctx.scan, 'id', ctx.scan)
+                        if isinstance(scan_id, int):
+                            cur.execute(f"SELECT {col_name} FROM {target_table} WHERE scan_id=?", (scan_id,))
+                        else:
+                            cur.execute(f"SELECT {col_name} FROM {target_table}")
+                    else:
+                        cur.execute(f"SELECT {col_name} FROM {target_table}")
+                        
+                    for row in cur.fetchall():
+                        if row[0]: subdomains.add(row[0])
+        except Exception as e:
+            logger.error(f"[-] Database extraction error: {e}")
 
-    # لو النطاقات مبعوتة مباشرة
-    if not recon_data and "subdomains" in kwargs:
-        recon_data = {"subdomains": kwargs["subdomains"]}
-
-    subdomains = []
-    if isinstance(recon_data, dict):
-        if "subdomains" in recon_data:
-            subs = recon_data["subdomains"]
-            subdomains = list(subs.keys()) if isinstance(subs, dict) else subs
-        else:
-            subdomains = list(recon_data.keys())
+    subdomains = list(subdomains)
 
     if not subdomains:
-        logger.warning("[-] No subdomains provided to Web stage. Skipping.")
+        logger.warning("[-] No subdomains found in Database. Skipping Web stage.")
         return {"live_urls": []}
 
-    logger.info(f"[+] Successfully extracted {len(subdomains)} subdomains. Passing to httpx...")
+    logger.info(f"[+] Successfully loaded {len(subdomains)} subdomains from Database.")
+    
+    # 4. تشغيل httpx لمعرفة المواقع اللي عليها Web Server شغال
     live_urls = asyncio.run(run_httpx(subdomains))
     
     return {
