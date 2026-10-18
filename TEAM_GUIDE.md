@@ -157,10 +157,20 @@ cp .env.example .env
 nano .env
 ```
 
-املا القيم:
+املا القيم اللي محتاجاها بس، باقي المفاتيح سيبوها فاضية — أي مفتاح فاضي بيتتخطى تلقائياً من غير error:
 
-- `NVD_API_KEY=` مفتاح **مجاني**: ادخل `nvd.nist.gov/developers/request-an-api-key` وحط إيميلك، والمفتاح بيوصلك على الإيميل. من غيره NVD بيحدّد عدد الطلبات.
-- `DISCORD_WEBHOOK_URL=` اختياري. لو عايز تنبيهات: في سيرفر Discord بتاعك افتح Settings ثم Integrations ثم Webhooks ثم New Webhook، وانسخ الرابط.
+| المفتاح | إجباري؟ | منين |
+| --- | --- | --- |
+| `NVD_API_KEY` | موصى به | `nvd.nist.gov/developers/request-an-api-key` (مجاني، بيوصل بالإيميل) |
+| `SHODAN_API_KEY` | اختياري | حساب مجاني على `shodan.io` |
+| `CENSYS_API_KEY` | اختياري | حساب مجاني على `censys.io` |
+| `SECURITYTRAILS_API_KEY` | اختياري | حساب مجاني (خطة محدودة شهرياً) على `securitytrails.com` |
+| `VIRUSTOTAL_API_KEY` | اختياري | حساب مجاني على `virustotal.com` |
+| `OTX_API_KEY` | اختياري | حساب مجاني على `otx.alienvault.com` |
+| `CHAOS_API_KEY` | اختياري | التسجيل على `chaos.projectdiscovery.io` |
+| `DISCORD_WEBHOOK_URL` | اختياري | Discord: Settings ثم Integrations ثم Webhooks ثم New Webhook |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | اختياري | اعملي بوت عن طريق `@BotFather` في تيليجرام |
+| `WEBHOOK_URL` | اختياري | أي endpoint عام يستقبل POST (Slack/Teams/الخ) |
 
 **اتأكد:** شغّل `marsadix doctor` وبص على آخر سطر. المفروض يقول `API key: set`.
 
@@ -173,6 +183,21 @@ python -m pytest -q
 ```
 
 المفروض كل الاختبارات تنجح (`passed` ومفيش `failed`). لو في اختبار فشل من أول يوم، بلّغ الفريق قبل ما تكتب أي كود.
+
+## خطوة 7.5 — بديل اختياري: Docker بدل تثبيت الأدوات يدوي
+
+لو مش عايزة تمري بخطوة 5 (تثبيت الأدوات واحدة واحدة)، فيه `Dockerfile` جاهز فيه كل الأدوات متسطبة جواه:
+
+```
+docker build -t marsadix .
+docker run --rm -v marsadix-data:/data marsadix doctor
+docker run --rm -v marsadix-data:/data marsadix scan example.com
+docker run --rm -v marsadix-data:/data marsadix report example.com --out /data/output
+```
+
+`-v marsadix-data:/data` بيخلي قاعدة البيانات والتقارير تتخزن بره الـ container (في volume اسمه `marsadix-data`)، عشان ملفاتك متضيعش لما الـ container يقفل.
+
+**ده بديل للخطوتين 5 و8 مع بعض، مش إضافة ليهم.** لو شغّالة بـ Docker، تقدري تتخطي خطوة 5 بالكامل وتكمّلي من خطوة 9. لسه محتاجة Python وGit على جهازك عشان تكتبي وتعدّلي الكود (خطوات 1-4 و10 وبعدها).
 
 ## خطوة 8 — هدف تجربة آمن
 
@@ -252,6 +277,17 @@ marsadix scope scope.txt www.vulnweb.com rest.vulnweb.com google.com vulnweb.com
 | `marsadix monitor` | `marsadix/monitor/runner.py` | `run(conn, config, dry_run=False, since=None)` |
 | `marsadix diff` | `marsadix/core/diff.py` | `run_diff(conn, target, old_id=None, new_id=None)` |
 | `marsadix report` | `marsadix/reports/generate.py` | `generate_report(conn, target, fmt, out_dir, scan_id=None)` |
+
+**حالة الملفات دلوقتي:**
+
+| الملف | الحالة |
+| --- | --- |
+| `marsadix/core/diff.py` | ✅ متنفذ (track stage + diff engine + CLI) |
+| `marsadix/reports/generate.py` | ✅ متنفذ (HTML + JSON) |
+| `marsadix/recon/stage.py` | ⬜ لسه فاضي — الشخص 1 |
+| `marsadix/web/stage.py` و `marsadix/asm/stage.py` | ⬜ لسه فاضي — الشخص 2 |
+| `marsadix/monitor/runner.py` | ⬜ لسه فاضي — الشخص 3 و4 |
+| `marsadix/core/graph.py` | ⬜ لسه فاضي بالكامل (الـ storage جاهز في `db.py`: `upsert_graph_node`, `add_graph_edge`, `get_graph`, `get_neighbors`) |
 
 **الـ `ctx` اللي بتستقبله المرحلة:**
 
@@ -409,7 +445,31 @@ for host in hosts:
 | CVE Monitor | `CVE` و`Finding` بـ `source=cve_match` و`Alert` |
 | Core | `TrackedAsset` و`ScanDiff` |
 
-**مثال:** حفظ assets جوه الـ stage:
+**حقول إضافية مهمة اتضافت على `Finding`** (استخدموها لو بتكتبوا `asm/stage.py` أو أي كشف مخصص):
+
+| الحقل | قيمته | ليه |
+| --- | --- | --- |
+| `owasp_category` | `owasp.get_owasp_category("xss_detected")` مثلاً | تصنيف الـ finding تحت بند OWASP Top 10 (شوفوا `marsadix/owasp.py` للقايمة الكاملة) |
+| `source_reference` | نص حر، مثلاً `"PortSwigger XSS methodology"` | مصدر التقنية اللي اتبنى عليها الكشف |
+| `status` | `DetectionStatus.DETECTED` / `.NEEDS_REVIEW` / `.NO_INDICATORS` | **لازم** تحطوه، مفيش حالة افتراضية آمنة غير `NO_INDICATORS` |
+| `exploited` | سيبوها زي ما هي (`False` افتراضي) | الأداة بتكتشف بس، مابتستغلش. محدش يغيّرها |
+
+**مثال:** حفظ assets جوه الـ stage، مع تسجيل أكتر من مصدر لنفس الـ host (R3/R4):
+
+```python
+from .. import db
+from ..models import Asset, DiscoverySource
+
+def run(ctx):
+    host = "dev.vulnweb.com"
+    if ctx.in_scope(host):
+        db.save_many(ctx.conn, "assets",
+                     [Asset(scan_id=ctx.scan.id, host=host, source=DiscoverySource.PASSIVE)])
+        # لو أكتر من أداة لقت نفس الـ host، سجّلوا كل مصدر على حدة:
+        db.save_asset_sources_many(ctx.conn, ctx.scan.id, host, ["subfinder", "crt.sh"])
+```
+
+**مثال قديم (لسه صحيح):** حفظ assets بدون تسجيل مصادر متعددة:
 
 ```python
 from .. import db
