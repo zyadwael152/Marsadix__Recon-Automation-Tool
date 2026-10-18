@@ -4,11 +4,11 @@ import logging
 import urllib.request
 from typing import Set, List, Dict, Tuple
 from .merger import merge_and_track
+from .api_sources import fetch_virustotal, fetch_alienvault # استدعاء ملف الـ APIs الجديد
 
 logger = logging.getLogger(__name__)
 
 async def run_cli_tool(tool_name: str, command: List[str]) -> Tuple[str, Set[str]]:
-    """تشغيل أداة من سطر الأوامر واستخراج النطاقات"""
     subdomains = set()
     logger.info(f"[*] جاري تشغيل {tool_name}...")
     try:
@@ -31,7 +31,6 @@ async def run_cli_tool(tool_name: str, command: List[str]) -> Tuple[str, Set[str
     return tool_name, subdomains
 
 async def fetch_crtsh(domain: str) -> Tuple[str, Set[str]]:
-    """الاستعلام من crt.sh عبر الـ API"""
     subdomains = set()
     url = f"https://crt.sh/?q=%25.{domain}&output=json"
     logger.info("[*] جاري الاستعلام من crt.sh...")
@@ -54,19 +53,23 @@ async def fetch_crtsh(domain: str) -> Tuple[str, Set[str]]:
         
     return "crt.sh", subdomains
 
-async def _async_discover(domain: str) -> Dict[str, List[str]]:
-    """تشغيل الأدوات وجمع النتائج"""
+async def _async_discover(domain: str, api_keys: dict = None) -> Dict[str, List[str]]:
+    if api_keys is None:
+        api_keys = {}
+        
+    vt_key = api_keys.get("virustotal")
+    
     tasks = [
         run_cli_tool("subfinder", ["subfinder", "-d", domain, "-silent"]),
         run_cli_tool("assetfinder", ["assetfinder", "--subs-only", domain]),
-        fetch_crtsh(domain)
+        fetch_crtsh(domain),
+        fetch_alienvault(domain),                  # الأداة الجديدة
+        fetch_virustotal(domain, vt_key)           # الأداة الجديدة
     ]
     results = await asyncio.gather(*tasks)
     tool_outputs = {tool_name: subs for tool_name, subs in results}
     
-    # دمج النتائج
     return merge_and_track(tool_outputs)
 
-def discover_subdomains(domain: str, *args, **kwargs) -> Dict[str, List[str]]:
-    """نقطة الدخول (Entry Point) الأساسية التي سيتم استدعاؤها من الـ CLI"""
-    return asyncio.run(_async_discover(domain))
+def discover_subdomains(domain: str, api_keys: dict = None, *args, **kwargs) -> Dict[str, List[str]]:
+    return asyncio.run(_async_discover(domain, api_keys))
