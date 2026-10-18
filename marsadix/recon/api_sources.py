@@ -7,6 +7,7 @@ from typing import Set, Tuple
 logger = logging.getLogger(__name__)
 
 async def fetch_virustotal(domain: str, api_key: str = None) -> Tuple[str, Set[str]]:
+    """Query VirusTotal and skip if API key is missing"""
     subdomains = set()
     if not api_key:
         logger.warning("[-] Skipped VirusTotal (No API Key provided).")
@@ -32,6 +33,7 @@ async def fetch_virustotal(domain: str, api_key: str = None) -> Tuple[str, Set[s
     return "virustotal", subdomains
 
 async def fetch_alienvault(domain: str) -> Tuple[str, Set[str]]:
+    """Query AlienVault OTX (Passive DNS)"""
     subdomains = set()
     url = f"https://otx.alienvault.com/api/v1/indicators/domain/{domain}/passive_dns"
     logger.info("[*] Querying AlienVault...")
