@@ -1,10 +1,11 @@
 """
 Marsadix command line.
 
-    marsadix scan example.com --scope scope.txt
+    marsadix scan example.com --scope scope.txt --mode passive
     marsadix monitor [--dry-run]
     marsadix diff example.com
     marsadix report example.com --format html
+    marsadix graph example.com           # Knowledge Graph summary
     marsadix doctor                      # which tools are installed?
     marsadix scope scope.txt dev.example.com 8.8.8.8
 
@@ -14,7 +15,14 @@ When you write your module, expose EXACTLY this function and the command works:
   monitor  ->  marsadix/monitor/runner.py : run(conn, config, dry_run=False, since=None)
   diff     ->  marsadix/core/diff.py      : run_diff(conn, target, old_id=None, new_id=None)
   report   ->  marsadix/reports/generate.py : generate_report(conn, target, fmt, out_dir, scan_id=None)
+  graph    ->  marsadix/core/graph.py     : run_graph(conn, target, scan_id=None)
   scan     ->  stages, see core/pipeline.py
+
+scan --mode (C15): passive (default, no contact with the target) | standard
+(+ resolve/probe/ports) | full (+ active web checks, nuclei, injection
+detection). scan --allow-injection (A5) is a separate, explicit opt-in: a
+"full" scan does NOT run injection-style checks unless this flag is also
+given, and it requires an authorized scope.
 """
 
 from __future__ import annotations
@@ -26,7 +34,7 @@ from typing import Optional, Sequence
 
 from . import db
 from .core.banner import print_banner
-from .core.config import Config, ConfigError, load_config
+from .core.config import SCAN_MODES, Config, ConfigError, load_config
 from .core.loader import load_callable
 from .core.log import setup_logging
 from .core.pipeline import run_scan
@@ -52,6 +60,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--scope", metavar="FILE", help="scope.txt (default: target + its subdomains)")
     s.add_argument("--depth", type=int, help="recursion depth limit")
     s.add_argument("--rate", type=int, help="requests per second")
+    s.add_argument("--mode", choices=list(SCAN_MODES), default=None,
+                    help="passive (default) | standard | full")
+    s.add_argument("--allow-injection", action="store_true",
+                    help="explicit opt-in for injection-style checks (XSS/SQLi/SSTI probes)")
 
     m = sub.add_parser("monitor", help="match new CVEs against stored technologies")
     m.add_argument("--dry-run", action="store_true", help="show matches, send nothing")
@@ -67,6 +79,10 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--format", choices=["html", "json", "both"], default="both")
     r.add_argument("--out", metavar="DIR", help="output directory")
     r.add_argument("--scan-id", type=int)
+
+    g = sub.add_parser("graph", help="Knowledge Graph summary for a target")
+    g.add_argument("target")
+    g.add_argument("--scan-id", type=int, help="defaults to the latest scan")
 
     sub.add_parser("doctor", help="check which external tools are installed")
 
@@ -89,9 +105,10 @@ def cmd_scan(a, cfg: Config) -> int:
         scope = Scope.from_target(target)
         log.warning("no --scope given: using %s and *.%s", target, target)
 
-    scan, results = run_scan(target, cfg, scope=scope, max_depth=a.depth, rate_limit=a.rate)
+    scan, results = run_scan(target, cfg, scope=scope, max_depth=a.depth, rate_limit=a.rate,
+                              mode=a.mode, allow_injection=(True if a.allow_injection else None))
     print(f"\nScan #{scan.id} of {scan.target}: {scan.status.value}"
-          f"{' (baseline)' if scan.is_baseline else ''}")
+          f"{' (baseline)' if scan.is_baseline else ''} [mode={scan.mode.value}]")
     for r in results:
         print(f"  {r.name:<8} {r.status:<8} {r.detail}")
     return 0 if scan.status.value == "completed" else 1
@@ -137,6 +154,14 @@ def cmd_report(a, cfg: Config) -> int:
                      out_dir=a.out or cfg.output_dir, scan_id=a.scan_id)
 
 
+def cmd_graph(a, cfg: Config) -> int:
+    target = normalize_host(a.target) or a.target
+    if load_callable("marsadix.core.graph:run_graph") is None:
+        return _optional("marsadix.core.graph:run_graph", "graph")
+    return _optional("marsadix.core.graph:run_graph", "graph", conn=_open_db(cfg),
+                     target=target, scan_id=a.scan_id)
+
+
 def cmd_doctor(a, cfg: Config) -> int:
     rows = tool_status()
     w = max(len(n) for n, _, _ in rows)
@@ -166,7 +191,8 @@ def cmd_scope(a, cfg: Config) -> int:
 
 
 COMMANDS = {"scan": cmd_scan, "monitor": cmd_monitor, "diff": cmd_diff,
-            "report": cmd_report, "doctor": cmd_doctor, "scope": cmd_scope}
+            "report": cmd_report, "graph": cmd_graph, "doctor": cmd_doctor,
+            "scope": cmd_scope}
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -183,7 +209,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if args.db:
             cfg.db_path = args.db
         return COMMANDS[args.command](args, cfg)
-    except (ConfigError, ScopeError) as e:
+    except (ConfigError, ScopeError, db.SchemaVersionError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
