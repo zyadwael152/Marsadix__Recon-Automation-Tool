@@ -1,5 +1,7 @@
 import logging
+import asyncio
 from .discovery import discover_subdomains
+from .resolver import filter_active_subdomains
 
 logger = logging.getLogger(__name__)
 
@@ -19,8 +21,12 @@ def run(ctx, *args, **kwargs) -> dict:
 
     logger.info(f"=== Starting Recon stage for target: {target} ===")
     
-    results = discover_subdomains(target, api_keys)
+    # 1. Discover subdomains from all active tools and sources
+    raw_results = discover_subdomains(target, api_keys)
+    
+    # 2. Filter out dead domains via DNS resolution
+    active_results = asyncio.run(filter_active_subdomains(raw_results))
     
     return {
-        "subdomains": results
+        "subdomains": active_results
     }
