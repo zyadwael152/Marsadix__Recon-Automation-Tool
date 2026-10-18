@@ -135,3 +135,24 @@ def test_get_target_timeline_orders_oldest_first(conn):
     timeline = get_target_timeline(conn, "example.com")
     assert [t["scan_id"] for t in timeline] == [s1.id, s2.id]
     assert timeline[1]["asset_count"] == 1
+
+
+def test_run_snapshots_no_scans_returns_error(conn, capsys):
+    from marsadix.core.diff import run_snapshots
+    rc = run_snapshots(conn, "example.com")
+    assert rc == 1
+    assert "no scans found" in capsys.readouterr().err
+
+
+def test_run_snapshots_lists_all_scans_in_order(conn, capsys):
+    from marsadix.core.diff import run_snapshots
+    s1 = _mk_scan(conn, "example.com", is_baseline=True)
+    s2 = _mk_scan(conn, "example.com")
+    db.save_many(conn, "assets", [Asset(scan_id=s2.id, host="api.example.com", in_scope=True)])
+
+    rc = run_snapshots(conn, "example.com")
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert f"#{s1.id}" in out and f"#{s2.id}" in out
+    assert out.index(f"#{s1.id}") < out.index(f"#{s2.id}")  # oldest first
+    assert "(baseline)" in out
