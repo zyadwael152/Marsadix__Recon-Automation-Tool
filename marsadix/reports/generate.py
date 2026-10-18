@@ -1,0 +1,429 @@
+"""
+Report generation (Core role owns this file; it renders everyone else's data).
+
+Entry point, called by `marsadix report <target>`:
+
+    generate_report(conn, target, fmt="both", out_dir="output", scan_id=None) -> int
+
+Two outputs, same underlying data, zero external dependencies (stdlib only,
+matching pyproject.toml's dependencies = []):
+
+    JSON -> machine-readable snapshot of one scan (C10). For CI, exports,
+            or feeding another tool.
+    HTML -> one self-contained file, no network calls needed to view it
+            (C11, C18, C19). Three layers in one page:
+              1. Overview  - headline cards, a posture score, OWASP coverage
+                             %, what changed since the previous scan
+              2. Details   - findings table and assets table. A
+                             Triage/Engagement toggle (top right) switches
+                             between a quick-scan view and the full
+                             evidence/attribution view for every finding
+              3. Appendix  - methodology + the Detection Limitations
+                             disclosure (C23): "No Indicators" is never
+                             presented as "Not Vulnerable" (A10)
+
+This module only READS and RENDERS. It does not compute risk. The
+_preliminary_posture_score() below is a transparent, documented placeholder
+(severity-weighted finding count) until Person 4 wires in the real
+context-aware Risk Scoring / Attack Surface Score (M15 / M17) -- see the
+docstring on that function for the exact extension point.
+
+Not yet implemented here (left for a later pass, see C20):
+    - SARIF export
+    - PDF export
+  CSV export of findings IS implemented, client-side, via the "Export CSV"
+  button (pure JS, no server round-trip, no new dependency).
+"""
+
+from __future__ import annotations
+
+import html
+import json
+import logging
+import sys
+from pathlib import Path
+from typing import Optional
+
+from .. import db
+from ..core.diff import compute_diff
+from ..models import utcnow
+from ..owasp import ALL_CATEGORIES
+
+log = logging.getLogger(__name__)
+
+_SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"]
+_SEVERITY_WEIGHT = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
+_STATUS_LABEL = {
+    "detected": "Detected",
+    "needs_review": "Needs Review",
+    "no_indicators": "No Indicators",
+}
+
+
+# --------------------------------------------------------------------------
+# data gathering (reads only)
+# --------------------------------------------------------------------------
+
+def _previous_completed_scan(conn, target: str, exclude_scan_id: int) -> Optional[dict]:
+    row = conn.execute(
+        "SELECT * FROM scans WHERE target=? AND id<>? AND status='completed' "
+        "ORDER BY started_at DESC LIMIT 1",
+        (target, exclude_scan_id)).fetchone()
+    return dict(row) if row else None
+
+
+def _preliminary_posture_score(findings: list[dict]) -> int:
+    """
+    0-100, higher = healthier. A transparent placeholder: counts findings
+    weighted by severity and decays a perfect score.
+
+    EXTENSION POINT for Person 4 (M15/M17): once the real context-aware Risk
+    Scoring exists (CVSS + EPSS + KEV + exposure + asset criticality), swap
+    the body of this function for a call into that module. Nothing else in
+    this file needs to change -- every caller just reads the returned int.
+    """
+    if not findings:
+        return 100
+    weighted = sum(_SEVERITY_WEIGHT.get(f.get("severity"), 0) for f in findings)
+    return max(0, 100 - weighted * 4)
+
+
+def _gather(conn, target: str, scan_id: Optional[int]) -> Optional[dict]:
+    if scan_id is None:
+        latest = db.get_latest_scans(conn, target, limit=1)
+        if not latest:
+            return None
+        scan_id = latest[0]["id"]
+
+    scan_row = conn.execute("SELECT * FROM scans WHERE id=?", (scan_id,)).fetchone()
+    if scan_row is None:
+        return None
+
+    findings = [dict(r) for r in db.get_findings(conn, scan_id)]
+    assets = [dict(r) for r in db.get_assets(conn, scan_id)]
+
+    prev = _previous_completed_scan(conn, target, scan_id)
+    diff = compute_diff(conn, prev["id"], scan_id) if prev else None
+
+    return {
+        "target": target,
+        "scan": dict(scan_row),
+        "assets": assets,
+        "services": [dict(r) for r in db.get_services(conn, scan_id)],
+        "technologies": [dict(r) for r in db.get_technologies(conn, scan_id)],
+        "web_items": [dict(r) for r in db.get_web_items(conn, scan_id)],
+        "findings": findings,
+        "owasp_coverage": db.get_owasp_coverage(conn, scan_id),
+        "source_coverage": db.get_source_coverage(conn, scan_id),
+        "posture_score": _preliminary_posture_score(findings),
+        "previous_scan_id": prev["id"] if prev else None,
+        "diff": diff.to_dict() if diff else None,
+        "generated_at": utcnow(),
+    }
+
+
+# --------------------------------------------------------------------------
+# JSON output (C10)
+# --------------------------------------------------------------------------
+
+def _write_json(data: dict, out_dir: Path, target: str, scan_id: int) -> Path:
+    path = out_dir / f"{target}_scan{scan_id}_report.json"
+    path.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+    return path
+
+
+# --------------------------------------------------------------------------
+# HTML output (C11, C18, C19, C23)
+# --------------------------------------------------------------------------
+
+def _e(value) -> str:
+    """HTML-escape anything that might end up in the page."""
+    return html.escape("" if value is None else str(value))
+
+
+def _findings_rows(findings: list[dict]) -> str:
+    rows = []
+    order = {s: i for i, s in enumerate(_SEVERITY_ORDER)}
+    for f in sorted(findings, key=lambda f: order.get(f.get("severity"), 99)):
+        status = f.get("status", "no_indicators")
+        rows.append(f"""
+        <tr class="sev-{_e(f.get('severity'))}">
+          <td>{_e(f.get('host'))}</td>
+          <td>{_e(f.get('title'))}</td>
+          <td><span class="badge sev-{_e(f.get('severity'))}">{_e(f.get('severity'))}</span></td>
+          <td><span class="badge status-{_e(status)}">{_e(_STATUS_LABEL.get(status, status))}</span></td>
+          <td>{_e(f.get('owasp_category') or '-')}</td>
+          <td>{_e(f.get('confidence'))}</td>
+          <td class="engagement-only">{_e(f.get('evidence') or '-')}</td>
+          <td class="engagement-only">{_e(f.get('source_reference') or '-')}</td>
+          <td class="engagement-only">{_e(f.get('url') or '-')}</td>
+          <td class="engagement-only"><span class="badge exploited-false">Detected — Not Exploited</span></td>
+        </tr>""")
+    return "".join(rows) if rows else '<tr><td colspan="10">No findings recorded for this scan.</td></tr>'
+
+
+def _assets_rows(assets: list[dict]) -> str:
+    rows = []
+    for a in assets:
+        rows.append(f"""
+        <tr>
+          <td>{_e(a.get('host'))}</td>
+          <td>{_e(a.get('ip') or '-')}</td>
+          <td>{'yes' if a.get('in_scope') else 'no'}</td>
+          <td>{_e(a.get('confidence_score', 0))}</td>
+          <td>{_e(a.get('asn') or '-')}</td>
+          <td>{'yes (' + _e(a.get('cdn_name')) + ')' if a.get('is_cdn') else 'no'}</td>
+        </tr>""")
+    return "".join(rows) if rows else '<tr><td colspan="6">No assets recorded for this scan.</td></tr>'
+
+
+def _owasp_rows(coverage: dict) -> str:
+    breakdown = coverage.get("breakdown", {})
+    rows = []
+    for cat in ALL_CATEGORIES:
+        n = breakdown.get(cat, 0)
+        cls = "owasp-covered" if n else "owasp-uncovered"
+        rows.append(f"""
+        <tr class="{cls}">
+          <td>{_e(cat)}</td>
+          <td>{n}</td>
+          <td>{'tested' if n else 'no findings yet'}</td>
+        </tr>""")
+    return "".join(rows)
+
+
+def _diff_section(diff: Optional[dict], prev_id: Optional[int], scan_id: int) -> str:
+    if diff is None:
+        return '<p class="muted">This is the first scan of this target — no previous scan to compare against.</p>'
+
+    def _list(title: str, items: list[str]) -> str:
+        if not items:
+            return f"<p><strong>{_e(title)}:</strong> none</p>"
+        lis = "".join(f"<li>{_e(i)}</li>" for i in items[:30])
+        more = f"<li><em>...and {len(items) - 30} more</em></li>" if len(items) > 30 else ""
+        return f"<p><strong>{_e(title)}:</strong></p><ul>{lis}{more}</ul>"
+
+    return f"""
+      <p class="muted">Compared against scan #{prev_id} (previous) → scan #{scan_id} (this report).</p>
+      {_list("New assets", diff["new_assets"])}
+      {_list("Removed assets", diff["removed_assets"])}
+      {_list("New open ports", diff["new_ports"])}
+      {_list("Closed ports", diff["closed_ports"])}
+      {_list("Changed technologies", diff["changed_technologies"])}
+      {_list("New findings", diff["new_findings"])}
+      {_list("Resolved findings", diff["resolved_findings"])}
+    """
+
+
+_CSS = """
+:root {
+  --bg:#f7f8fa; --surface:#ffffff; --text:#1b1f24; --muted:#5b6472;
+  --border:#e2e5ea; --accent:#2457d9;
+  --crit:#b3261e; --high:#c75b12; --med:#a67c00; --low:#2f7a3d; --info:#5b6472;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:#13161b; --surface:#1b1f26; --text:#e8eaed; --muted:#9aa4b2; --border:#2b313b;
+  }
+}
+:root[data-theme="dark"] {
+  --bg:#13161b; --surface:#1b1f26; --text:#e8eaed; --muted:#9aa4b2; --border:#2b313b;
+}
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--text);
+       font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; line-height:1.5; }
+header { padding:24px 32px; border-bottom:1px solid var(--border); }
+header h1 { margin:0 0 4px; font-size:22px; }
+header p { margin:0; color:var(--muted); font-size:14px; }
+main { max-width:1100px; margin:0 auto; padding:24px 32px 64px; }
+.toolbar { display:flex; gap:8px; margin-bottom:24px; flex-wrap:wrap; }
+button { background:var(--surface); color:var(--text); border:1px solid var(--border);
+         border-radius:8px; padding:8px 14px; font-size:13px; cursor:pointer; }
+button.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+.cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-bottom:28px; }
+.card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:16px; }
+.card .num { font-size:28px; font-weight:700; }
+.card .label { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+section { margin-bottom:36px; }
+h2 { font-size:16px; border-bottom:1px solid var(--border); padding-bottom:8px; }
+table { width:100%; border-collapse:collapse; font-size:13px; background:var(--surface);
+        border:1px solid var(--border); border-radius:10px; overflow:hidden; }
+th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--border); }
+th { color:var(--muted); font-weight:600; font-size:11px; text-transform:uppercase; }
+.badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:600; }
+.sev-critical, .badge.sev-critical { color:#fff; background:var(--crit); }
+.sev-high, .badge.sev-high { color:#fff; background:var(--high); }
+.sev-medium, .badge.sev-medium { color:#fff; background:var(--med); }
+.sev-low, .badge.sev-low { color:#fff; background:var(--low); }
+.sev-info, .badge.sev-info { color:#fff; background:var(--info); }
+.badge.status-detected { background:var(--crit); color:#fff; }
+.badge.status-needs_review { background:var(--med); color:#fff; }
+.badge.status-no_indicators { background:var(--border); color:var(--muted); }
+.badge.exploited-false { background:transparent; border:1px solid var(--low); color:var(--low); }
+.owasp-covered td:first-child { font-weight:600; }
+.owasp-uncovered { color:var(--muted); }
+.engagement-only { display:none; }
+body.engagement .engagement-only { display:table-cell; }
+.muted { color:var(--muted); }
+.limitations { background:var(--surface); border:1px solid var(--border);
+               border-left:4px solid var(--med); border-radius:10px; padding:16px; }
+"""
+
+_JS = """
+function setView(mode) {
+  document.body.classList.toggle('engagement', mode === 'engagement');
+  document.getElementById('btn-triage').classList.toggle('active', mode === 'triage');
+  document.getElementById('btn-engagement').classList.toggle('active', mode === 'engagement');
+}
+function exportCSV() {
+  const rows = [['host','title','severity','status','owasp_category','confidence']];
+  document.querySelectorAll('#findings-table tbody tr').forEach(tr => {
+    const cells = tr.querySelectorAll('td');
+    if (cells.length < 6) return;
+    rows.push(Array.from(cells).slice(0, 6).map(td => '"' + td.textContent.trim().replace(/"/g,'""') + '"'));
+  });
+  const csv = rows.map(r => r.join(',')).join('\\n');
+  const blob = new Blob([csv], {type: 'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'marsadix_findings.csv';
+  a.click();
+}
+"""
+
+
+def _render_html(data: dict) -> str:
+    scan = data["scan"]
+    findings = data["findings"]
+    sev_counts = {s: 0 for s in _SEVERITY_ORDER}
+    for f in findings:
+        sev_counts[f.get("severity", "info")] = sev_counts.get(f.get("severity", "info"), 0) + 1
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Marsadix Report — {_e(data['target'])}</title>
+<style>{_CSS}</style>
+</head>
+<body>
+<header>
+  <h1>Marsadix Security Report — {_e(data['target'])}</h1>
+  <p>Scan #{scan['id']} · mode: {_e(scan.get('mode', 'passive'))} ·
+     {'baseline' if scan.get('is_baseline') else 'tracked'} ·
+     generated {_e(data['generated_at'])}</p>
+</header>
+<main>
+  <div class="toolbar">
+    <button id="btn-triage" class="active" onclick="setView('triage')">Triage view</button>
+    <button id="btn-engagement" onclick="setView('engagement')">Engagement view</button>
+    <button onclick="exportCSV()">Export findings (CSV)</button>
+  </div>
+
+  <section>
+    <div class="cards">
+      <div class="card"><div class="num">{data['posture_score']}</div><div class="label">Posture score (preliminary)</div></div>
+      <div class="card"><div class="num">{len(data['assets'])}</div><div class="label">Assets</div></div>
+      <div class="card"><div class="num">{len(findings)}</div><div class="label">Findings</div></div>
+      <div class="card"><div class="num">{sev_counts.get('critical',0) + sev_counts.get('high',0)}</div><div class="label">Critical + High</div></div>
+      <div class="card"><div class="num">{data['owasp_coverage']['coverage_pct']}%</div><div class="label">OWASP Top 10 coverage</div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Changes since previous scan</h2>
+    {_diff_section(data['diff'], data['previous_scan_id'], scan['id'])}
+  </section>
+
+  <section>
+    <h2>OWASP Top 10 (2021) coverage</h2>
+    <table>
+      <thead><tr><th>Category</th><th>Findings</th><th>Status</th></tr></thead>
+      <tbody>{_owasp_rows(data['owasp_coverage'])}</tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Findings</h2>
+    <table id="findings-table">
+      <thead><tr>
+        <th>Host</th><th>Title</th><th>Severity</th><th>Status</th><th>OWASP</th><th>Confidence</th>
+        <th class="engagement-only">Evidence</th>
+        <th class="engagement-only">Source</th>
+        <th class="engagement-only">URL</th>
+        <th class="engagement-only">Exploitation</th>
+      </tr></thead>
+      <tbody>{_findings_rows(findings)}</tbody>
+    </table>
+  </section>
+
+  <section class="engagement-only" style="display:block">
+    <h2>Assets</h2>
+    <table>
+      <thead><tr><th>Host</th><th>IP</th><th>In scope</th><th>Source confidence</th><th>ASN</th><th>CDN</th></tr></thead>
+      <tbody>{_assets_rows(data['assets'])}</tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Methodology &amp; limitations</h2>
+    <div class="limitations">
+      <p><strong>Detection, not exploitation.</strong> Every finding above is a
+      <em>Finding</em> — Marsadix stops at verification. No payload in this
+      tool extracts data, modifies state, or executes code on the target.
+      The "exploited" flag on every finding is always <code>false</code>.</p>
+      <p><strong>Three-state results.</strong> A finding is one of
+      <em>Detected</em> (clear evidence), <em>Needs Review</em> (a partial
+      signal, inconclusive), or <em>No Indicators</em>. "No Indicators" means
+      the automated checks found nothing — it does <u>not</u> mean the asset
+      is free of the issue. Detection relies on a fixed set of signature
+      payloads and can miss custom logic, WAF-filtered variants, or
+      context-specific bugs (false negatives). A manual review is
+      recommended for anything in scope that this report marks as "No
+      Indicators" on a sensitive asset.</p>
+      <p><strong>Source confidence.</strong> Each discovered asset is scored
+      0-100 from how many independent sources found it, whether it resolves,
+      and whether it answers over HTTP — see the Assets table above.</p>
+    </div>
+  </section>
+</main>
+<script>{_JS}</script>
+</body>
+</html>"""
+
+
+def _write_html(data: dict, out_dir: Path, target: str, scan_id: int) -> Path:
+    path = out_dir / f"{target}_scan{scan_id}_report.html"
+    path.write_text(_render_html(data), encoding="utf-8")
+    return path
+
+
+# --------------------------------------------------------------------------
+# entry point
+# --------------------------------------------------------------------------
+
+def generate_report(conn, target: str, fmt: str = "both", out_dir: str = "output",
+                     scan_id: Optional[int] = None) -> int:
+    """Entry point for `marsadix report`. Returns a process exit code."""
+    target = (target or "").strip()
+    data = _gather(conn, target, scan_id)
+    if data is None:
+        extra = f" (scan id {scan_id})" if scan_id else ""
+        print(f"error: no completed scans found for {target!r}{extra}. "
+              f"Run `marsadix scan {target}` first.", file=sys.stderr)
+        return 1
+
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    real_scan_id = data["scan"]["id"]
+
+    written = []
+    if fmt in ("json", "both"):
+        written.append(_write_json(data, out, target, real_scan_id))
+    if fmt in ("html", "both"):
+        written.append(_write_html(data, out, target, real_scan_id))
+
+    for p in written:
+        print(f"wrote {p}")
+    return 0
