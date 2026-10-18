@@ -8,17 +8,27 @@ from .api_sources import fetch_virustotal, fetch_alienvault
 
 logger = logging.getLogger(__name__)
 
-async def run_cli_tool(tool_name: str, command: List[str]) -> Tuple[str, Set[str]]:
+async def run_cli_tool(tool_name: str, command: List[str], timeout: int = 120) -> Tuple[str, Set[str]]:
     subdomains = set()
     logger.info(f"[*] Running {tool_name}...")
+    process = None
     try:
         process = await asyncio.create_subprocess_exec(
             *command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        stdout, _ = await process.communicate()
-        
+        try:
+            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            # Don't let one slow source (e.g. amass passive mode on a big
+            # target) block the rest of the recon stage indefinitely - kill
+            # it, keep whatever the other tools already found, and move on.
+            process.kill()
+            await process.wait()
+            logger.warning(f"[-] {tool_name} timed out after {timeout}s - skipped.")
+            return tool_name, subdomains
+
         if stdout:
             for line in stdout.decode().splitlines():
                 sub = line.strip().lower()
@@ -71,7 +81,7 @@ async def _async_discover(domain: str, api_keys: dict = None) -> Dict[str, List[
     tasks = [
         run_cli_tool("subfinder", ["subfinder", "-d", domain, "-silent"]),
         run_cli_tool("assetfinder", ["assetfinder", "--subs-only", domain]),
-        run_cli_tool("amass", ["amass", "enum", "-passive", "-d", domain, "-silent"]),
+        run_cli_tool("amass", ["amass", "enum", "-passive", "-d", domain, "-silent"], timeout=180),
         run_cli_tool("findomain", ["findomain", "-t", domain, "-q"]),
         run_chaos(domain, chaos_key),
         fetch_crtsh(domain),
