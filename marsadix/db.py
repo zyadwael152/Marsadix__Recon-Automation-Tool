@@ -186,6 +186,9 @@ CREATE INDEX IF NOT EXISTS idx_findings_owasp ON findings(owasp_category);
 CREATE INDEX IF NOT EXISTS idx_scans_target  ON scans(target, started_at);
 CREATE INDEX IF NOT EXISTS idx_graph_edges_src ON graph_edges(src_id);
 CREATE INDEX IF NOT EXISTS idx_graph_edges_dst ON graph_edges(dst_id);
+
+-- One row, tracks which SCHEMA_VERSION this file was created/migrated at.
+CREATE TABLE IF NOT EXISTS schema_info (version INTEGER NOT NULL);
 """
 
 # model field name -> DB column name (when they differ)
@@ -195,6 +198,16 @@ _COLMAP = {"cves": {"references": "refs"}}
 # to delete their local marsadix.db (see TEAM_GUIDE.md step 15).
 SCHEMA_VERSION = 2
 
+# A column that was added in SCHEMA_VERSION 2. If a db file already has a
+# `findings` table but THIS column is missing, it predates the schema_info
+# table itself -- the only way to tell "genuinely brand new db" apart from
+# "old db created before versioning existed".
+_V2_MARKER_COLUMN = ("findings", "owasp_category")
+
+
+class SchemaVersionError(RuntimeError):
+    """Raised when marsadix.db was created by an older/newer code version."""
+
 
 def connect(path: str = "marsadix.db") -> sqlite3.Connection:
     conn = sqlite3.connect(path)
@@ -203,9 +216,52 @@ def connect(path: str = "marsadix.db") -> sqlite3.Connection:
     return conn
 
 
+def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    return any(r["name"] == column for r in conn.execute(f"PRAGMA table_info({table})"))
+
+
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+    ).fetchone() is not None
+
+
+_OUT_OF_DATE_MSG = (
+    "Delete the local database file and re-run your scans:\n"
+    "  Remove-Item marsadix.db      (PowerShell)\n"
+    "  rm marsadix.db               (Linux / macOS)"
+)
+
+
 def init_db(conn: sqlite3.Connection) -> None:
+    """
+    Create any missing tables, then make sure this file's schema actually
+    matches SCHEMA_VERSION. CREATE TABLE IF NOT EXISTS never alters an
+    existing table, so a db created by older code would otherwise fail much
+    later with a confusing `sqlite3.OperationalError: no such column` deep
+    inside some unrelated save/read call -- or even inside this function's
+    own executescript(), since SCHEMA_SQL also creates an index on that
+    column. So the compatibility check below runs BEFORE executescript(),
+    not after, to fail fast with an actionable message instead of a raw
+    sqlite3 traceback.
+    """
+    table, column = _V2_MARKER_COLUMN
+    if _table_exists(conn, table) and not _has_column(conn, table, column):
+        raise SchemaVersionError(
+            f"This database predates schema v{SCHEMA_VERSION} "
+            f"(missing column '{table}.{column}').\n{_OUT_OF_DATE_MSG}")
+
     conn.executescript(SCHEMA_SQL)
     conn.commit()
+
+    row = conn.execute("SELECT version FROM schema_info").fetchone()
+    if row is None:
+        conn.execute("INSERT INTO schema_info (version) VALUES (?)", (SCHEMA_VERSION,))
+        conn.commit()
+    elif row["version"] != SCHEMA_VERSION:
+        raise SchemaVersionError(
+            f"This database is schema v{row['version']}, but the installed code "
+            f"expects v{SCHEMA_VERSION}.\n{_OUT_OF_DATE_MSG}")
 
 
 # ---------------------------------------------------------------- generic save
