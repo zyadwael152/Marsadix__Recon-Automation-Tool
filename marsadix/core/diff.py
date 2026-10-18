@@ -194,6 +194,29 @@ def _print_diff(diff: ScanDiff, target: str, old_id: int, new_id: int) -> None:
         print("\nNo changes between these two scans.")
 
 
+def run_snapshots(conn, target: str) -> int:
+    """
+    Entry point for `marsadix snapshots`. Every scan of `target` is already a
+    snapshot (C16) -- this just lists them in order with basic counts, built
+    on get_target_timeline(). The Attack Path Time Machine (C17) walks this
+    same list and diffs consecutive pairs; this command is the quick,
+    human-readable view of it.
+    """
+    timeline = get_target_timeline(conn, target)
+    if not timeline:
+        print(f"error: no scans found for {target!r}. Run `marsadix scan {target}` first.",
+              file=sys.stderr)
+        return 1
+
+    print(f"Snapshots for {target} ({len(timeline)} scan(s)):\n")
+    for t in timeline:
+        flag = " (baseline)" if t["is_baseline"] else ""
+        print(f"  #{t['scan_id']:<4} {t['started_at']}  [{t['status']}]{flag}  "
+              f"{t['asset_count']} assets, {t['finding_count']} findings")
+    print(f"\nCompare any two with:  marsadix diff {target} --old <ID> --new <ID>")
+    return 0
+
+
 def run_diff(conn, target: str, old_id: Optional[int] = None, new_id: Optional[int] = None) -> int:
     """Entry point for `marsadix diff`. Returns a process exit code."""
     if old_id is None or new_id is None:
@@ -215,7 +238,3 @@ def run_diff(conn, target: str, old_id: Optional[int] = None, new_id: Optional[i
     diff = compute_diff(conn, old_id, new_id)
     _print_diff(diff, target, old_id, new_id)
     return 0
-    monkeypatch.setattr(pipeline, "load_callable", lambda p: boom if "recon" in p else None)
-    assert main(["--db", str(tmp_path / "t.db"), "scan", "example.com"]) == 1
-    out = capsys.readouterr().out
-    assert "failed" in out and "kaboom" in out
