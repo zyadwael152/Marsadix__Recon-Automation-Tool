@@ -15,8 +15,8 @@ import sqlite3
 from typing import Iterable, Optional
 
 from .models import (
-    Alert, Asset, CVE, Finding, MonitorState, Scan, Service, Technology,
-    TrackedAsset, WebItem, Email, utcnow,
+    Alert, Asset, AssetSource, CVE, Finding, MonitorState, Scan, Service,
+    Technology, TrackedAsset, WebItem, Email, utcnow,
 )
 
 SCHEMA_SQL = """
@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS scans (
     is_baseline   INTEGER NOT NULL DEFAULT 0,
     max_depth     INTEGER NOT NULL DEFAULT 2,
     scope_file    TEXT,
-    rate_limit    INTEGER
+    rate_limit    INTEGER,
+    mode          TEXT NOT NULL DEFAULT 'passive'
 );
 
 CREATE TABLE IF NOT EXISTS assets (
@@ -43,7 +44,19 @@ CREATE TABLE IF NOT EXISTS assets (
     cdn_name TEXT, asn TEXT, asn_owner TEXT,
     depth INTEGER NOT NULL DEFAULT 0,
     source TEXT NOT NULL, parent_host TEXT, first_seen TEXT NOT NULL,
+    confidence_score INTEGER NOT NULL DEFAULT 0,
     UNIQUE (scan_id, host)
+);
+
+-- Which tool/API found each host. Many rows per (scan_id, host) = higher
+-- confidence the subdomain really exists. (R3 / R4)
+CREATE TABLE IF NOT EXISTS asset_sources (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_id INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+    host TEXT NOT NULL,
+    source_name TEXT NOT NULL,
+    found_at TEXT NOT NULL,
+    UNIQUE (scan_id, host, source_name)
 );
 
 CREATE TABLE IF NOT EXISTS services (
@@ -98,6 +111,7 @@ CREATE TABLE IF NOT EXISTS monitor_state (
 
 CREATE TABLE IF NOT EXISTS cves (
     cve_id TEXT PRIMARY KEY, description TEXT, cvss_score REAL,
+    epss_score REAL,
     severity TEXT NOT NULL DEFAULT 'info',
     published TEXT, modified TEXT,
     cpe_matches TEXT,            -- JSON
@@ -120,6 +134,10 @@ CREATE TABLE IF NOT EXISTS findings (
     in_kev INTEGER NOT NULL DEFAULT 0,
     found_at TEXT NOT NULL,
     dedup_key TEXT NOT NULL,
+    owasp_category TEXT,
+    source_reference TEXT,
+    status TEXT NOT NULL DEFAULT 'no_indicators',
+    exploited INTEGER NOT NULL DEFAULT 0,
     UNIQUE (scan_id, dedup_key)
 );
 
@@ -137,14 +155,45 @@ CREATE TABLE IF NOT EXISTS alerts (
     dedup_key TEXT NOT NULL UNIQUE      -- never alert twice
 );
 
+-- Knowledge Graph (G1): generic nodes/edges so any entity type can be linked
+-- without a schema change per relationship kind.
+CREATE TABLE IF NOT EXISTS graph_nodes (
+    id TEXT PRIMARY KEY,              -- e.g. "subdomain:api.example.com", "cve:CVE-2024-1234"
+    node_type TEXT NOT NULL,          -- subdomain | ip | asn | cdn | port | service |
+                                       -- technology | cpe | cve | finding | email | js_file |
+                                       -- endpoint | certificate | org
+    label TEXT NOT NULL,
+    scan_id INTEGER REFERENCES scans(id) ON DELETE CASCADE,
+    attrs TEXT                        -- JSON blob of extra attributes
+);
+
+CREATE TABLE IF NOT EXISTS graph_edges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    src_id TEXT NOT NULL REFERENCES graph_nodes(id) ON DELETE CASCADE,
+    dst_id TEXT NOT NULL REFERENCES graph_nodes(id) ON DELETE CASCADE,
+    relation TEXT NOT NULL,           -- resolves_to | belongs_to | behind | exposes |
+                                       -- runs | has_cpe | affected_by | uses | serves |
+                                       -- contains | shares_cert_with | found_on | listed_in
+    scan_id INTEGER REFERENCES scans(id) ON DELETE CASCADE,
+    UNIQUE (src_id, dst_id, relation, scan_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_assets_scan   ON assets(scan_id);
+CREATE INDEX IF NOT EXISTS idx_asset_sources ON asset_sources(scan_id, host);
 CREATE INDEX IF NOT EXISTS idx_tech_name     ON technologies(name, version);
 CREATE INDEX IF NOT EXISTS idx_findings_scan ON findings(scan_id);
+CREATE INDEX IF NOT EXISTS idx_findings_owasp ON findings(owasp_category);
 CREATE INDEX IF NOT EXISTS idx_scans_target  ON scans(target, started_at);
+CREATE INDEX IF NOT EXISTS idx_graph_edges_src ON graph_edges(src_id);
+CREATE INDEX IF NOT EXISTS idx_graph_edges_dst ON graph_edges(dst_id);
 """
 
 # model field name -> DB column name (when they differ)
 _COLMAP = {"cves": {"references": "refs"}}
+
+# schema version: bump this whenever SCHEMA_SQL changes, and tell the team
+# to delete their local marsadix.db (see TEAM_GUIDE.md step 15).
+SCHEMA_VERSION = 2
 
 
 def connect(path: str = "marsadix.db") -> sqlite3.Connection:
@@ -265,6 +314,120 @@ def update_tracked_assets(conn, target: str, hosts: Iterable[str], scan_id: int)
     return ([] if is_baseline else new_hosts), gone, is_baseline
 
 
+# ------------------------------------------------------------- asset sources (R3/R4)
+
+def save_asset_source(conn, scan_id: int, host: str, source_name: str) -> None:
+    """Record that `source_name` found `host`. Call once per source per host."""
+    _save(conn, "asset_sources",
+          AssetSource(scan_id=scan_id, host=host, source_name=source_name))
+    conn.commit()
+
+
+def save_asset_sources_many(conn, scan_id: int, host: str, source_names: Iterable[str]) -> None:
+    for name in source_names:
+        _save(conn, "asset_sources",
+              AssetSource(scan_id=scan_id, host=host, source_name=name))
+    conn.commit()
+
+
+def get_asset_sources(conn, scan_id: int, host: str) -> list[str]:
+    """Every source name that found this host in this scan. (R4)"""
+    rows = conn.execute(
+        "SELECT source_name FROM asset_sources WHERE scan_id=? AND host=?",
+        (scan_id, host)).fetchall()
+    return [r["source_name"] for r in rows]
+
+
+def get_asset_confidence(conn, scan_id: int, host: str) -> dict:
+    """{'sources': [...], 'count': n} for a host. (R4)"""
+    sources = get_asset_sources(conn, scan_id, host)
+    return {"sources": sources, "count": len(sources)}
+
+
+def get_source_coverage(conn, scan_id: int) -> dict:
+    """
+    How many hosts each source found, and how many hosts were found by only
+    ONE source (useful for the Missing Asset Hunter, R17/R20).
+    """
+    rows = conn.execute(
+        "SELECT source_name, COUNT(DISTINCT host) AS n "
+        "FROM asset_sources WHERE scan_id=? GROUP BY source_name", (scan_id,)).fetchall()
+    per_source = {r["source_name"]: r["n"] for r in rows}
+
+    single = conn.execute(
+        "SELECT host FROM asset_sources WHERE scan_id=? "
+        "GROUP BY host HAVING COUNT(DISTINCT source_name) = 1", (scan_id,)).fetchall()
+    return {"per_source": per_source, "single_source_hosts": [r["host"] for r in single]}
+
+
+# -------------------------------------------------------------- OWASP coverage (M20)
+
+def get_owasp_coverage(conn, scan_id: int) -> dict:
+    """Coverage % + per-category finding counts for one scan. (M20)"""
+    from .owasp import ALL_CATEGORIES
+
+    rows = conn.execute(
+        "SELECT owasp_category, COUNT(*) AS n FROM findings "
+        "WHERE scan_id=? AND owasp_category IS NOT NULL "
+        "GROUP BY owasp_category", (scan_id,)).fetchall()
+    breakdown = {r["owasp_category"]: r["n"] for r in rows}
+    covered = len(breakdown)
+    total = len(ALL_CATEGORIES)
+    return {
+        "coverage_pct": round(covered / total * 100, 1) if total else 0.0,
+        "covered_categories": covered,
+        "total_categories": total,
+        "breakdown": breakdown,
+    }
+
+
+# ------------------------------------------------------------- graph storage (G1)
+
+def upsert_graph_node(conn, node_id: str, node_type: str, label: str,
+                       scan_id: Optional[int] = None, attrs: Optional[dict] = None) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO graph_nodes (id, node_type, label, scan_id, attrs) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (node_id, node_type, label, scan_id, json.dumps(attrs or {})))
+    conn.commit()
+
+
+def add_graph_edge(conn, src_id: str, dst_id: str, relation: str,
+                    scan_id: Optional[int] = None) -> None:
+    conn.execute(
+        "INSERT OR IGNORE INTO graph_edges (src_id, dst_id, relation, scan_id) "
+        "VALUES (?, ?, ?, ?)",
+        (src_id, dst_id, relation, scan_id))
+    conn.commit()
+
+
+def get_graph(conn, scan_id: int) -> dict:
+    """All nodes and edges for one scan, ready to hand to a visualizer."""
+    nodes = conn.execute(
+        "SELECT id, node_type, label, attrs FROM graph_nodes WHERE scan_id=?",
+        (scan_id,)).fetchall()
+    edges = conn.execute(
+        "SELECT src_id, dst_id, relation FROM graph_edges WHERE scan_id=?",
+        (scan_id,)).fetchall()
+    return {
+        "nodes": [dict(n) for n in nodes],
+        "edges": [dict(e) for e in edges],
+    }
+
+
+def get_neighbors(conn, node_id: str, scan_id: Optional[int] = None) -> list[dict]:
+    """Direct neighbors of one node, for blast-radius / attack-path queries (G3/G4)."""
+    q = ("SELECT dst_id AS id, relation, 'out' AS direction FROM graph_edges "
+         "WHERE src_id=?" + (" AND scan_id=?" if scan_id else "") +
+         " UNION ALL "
+         "SELECT src_id AS id, relation, 'in' AS direction FROM graph_edges "
+         "WHERE dst_id=?" + (" AND scan_id=?" if scan_id else ""))
+    params = ([node_id, scan_id, node_id, scan_id] if scan_id
+              else [node_id, node_id])
+    rows = conn.execute(q, params).fetchall()
+    return [dict(r) for r in rows]
+
+
 # ------------------------------------------------------------------------- reads
 
 def get_technologies(conn, scan_id: Optional[int] = None) -> list[sqlite3.Row]:
@@ -279,3 +442,29 @@ def get_technologies(conn, scan_id: Optional[int] = None) -> list[sqlite3.Row]:
 
 def get_assets(conn, scan_id: int) -> list[sqlite3.Row]:
     return conn.execute("SELECT * FROM assets WHERE scan_id=?", (scan_id,)).fetchall()
+
+
+def get_services(conn, scan_id: int) -> list[sqlite3.Row]:
+    return conn.execute("SELECT * FROM services WHERE scan_id=?", (scan_id,)).fetchall()
+
+
+def get_web_items(conn, scan_id: int) -> list[sqlite3.Row]:
+    return conn.execute("SELECT * FROM web_items WHERE scan_id=?", (scan_id,)).fetchall()
+
+
+def get_findings(conn, scan_id: int) -> list[sqlite3.Row]:
+    return conn.execute("SELECT * FROM findings WHERE scan_id=?", (scan_id,)).fetchall()
+
+
+def get_cves(conn) -> list[sqlite3.Row]:
+    return conn.execute("SELECT * FROM cves").fetchall()
+
+
+def get_pending_alerts(conn) -> list[sqlite3.Row]:
+    return conn.execute("SELECT * FROM alerts WHERE delivered=0").fetchall()
+
+
+def get_latest_scans(conn, target: str, limit: int = 2) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM scans WHERE target=? ORDER BY started_at DESC LIMIT ?",
+        (target, limit)).fetchall()
