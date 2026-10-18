@@ -4,13 +4,13 @@ import logging
 import urllib.request
 from typing import Set, List, Dict, Tuple
 from .merger import merge_and_track
-from .api_sources import fetch_virustotal, fetch_alienvault # استدعاء ملف الـ APIs الجديد
+from .api_sources import fetch_virustotal, fetch_alienvault
 
 logger = logging.getLogger(__name__)
 
 async def run_cli_tool(tool_name: str, command: List[str]) -> Tuple[str, Set[str]]:
     subdomains = set()
-    logger.info(f"[*] جاري تشغيل {tool_name}...")
+    logger.info(f"[*] Running {tool_name}...")
     try:
         process = await asyncio.create_subprocess_exec(
             *command,
@@ -24,16 +24,16 @@ async def run_cli_tool(tool_name: str, command: List[str]) -> Tuple[str, Set[str
                 sub = line.strip().lower()
                 if sub:
                     subdomains.add(sub)
-        logger.info(f"[+] {tool_name} اكتشفت {len(subdomains)} نطاق.")
+        logger.info(f"[+] {tool_name} discovered {len(subdomains)} subdomains.")
     except Exception as e:
-        logger.warning(f"[-] تم تخطي {tool_name} بسبب خطأ: {e}")
+        logger.warning(f"[-] Skipped {tool_name} due to error: {e}")
     
     return tool_name, subdomains
 
 async def fetch_crtsh(domain: str) -> Tuple[str, Set[str]]:
     subdomains = set()
     url = f"https://crt.sh/?q=%25.{domain}&output=json"
-    logger.info("[*] جاري الاستعلام من crt.sh...")
+    logger.info("[*] Querying crt.sh...")
     try:
         loop = asyncio.get_event_loop()
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -47,9 +47,9 @@ async def fetch_crtsh(domain: str) -> Tuple[str, Set[str]]:
                     sub = sub.strip()
                     if sub and not sub.startswith('*'):
                         subdomains.add(sub)
-        logger.info(f"[+] crt.sh اكتشفت {len(subdomains)} نطاق.")
+        logger.info(f"[+] crt.sh discovered {len(subdomains)} subdomains.")
     except Exception as e:
-        logger.warning(f"[-] تم تخطي crt.sh بسبب خطأ: {e}")
+        logger.warning(f"[-] Skipped crt.sh due to error: {e}")
         
     return "crt.sh", subdomains
 
@@ -63,8 +63,8 @@ async def _async_discover(domain: str, api_keys: dict = None) -> Dict[str, List[
         run_cli_tool("subfinder", ["subfinder", "-d", domain, "-silent"]),
         run_cli_tool("assetfinder", ["assetfinder", "--subs-only", domain]),
         fetch_crtsh(domain),
-        fetch_alienvault(domain),                  # الأداة الجديدة
-        fetch_virustotal(domain, vt_key)           # الأداة الجديدة
+        fetch_alienvault(domain),
+        fetch_virustotal(domain, vt_key)
     ]
     results = await asyncio.gather(*tasks)
     tool_outputs = {tool_name: subs for tool_name, subs in results}
