@@ -13,6 +13,10 @@
 ---
 
 
+## 📍 Current status
+
+This is an active student project. The **core engine** (scope enforcement, scan pipeline, scan-to-scan diffing, asset-change alerts, HTML/JSON reporting, OWASP Top 10 coverage mapping) is implemented and tested. The **discovery and detection modules** (recon, web surface collection, ASM/Nuclei, CVE monitor) are being built stage by stage on top of that engine — see the [Roadmap](#️-roadmap) for exactly what's done.
+
 ## ⚡ Overview
 
 **Marsadix** is an open-source command-line tool that brings reconnaissance, service discovery, vulnerability correlation, safe verification, scan comparison and CVE monitoring into one workflow.
@@ -40,9 +44,10 @@ Security assessments usually mean running several tools and manually stitching t
 
 | 🕵️ **Recursive reconnaissance** Passive and active discovery that feeds new findings back into the process, within scope and a depth limit. | 🗂️ **Broad collection** Subdomains, IPs, ports, services, technologies, URLs, JavaScript files, endpoints and public emails. |
 | --- | --- |
-| 🧠 **CVE correlation** Connect detected service and technology evidence with known vulnerabilities. | 📊 **Confidence scoring** Separate possible, likely and confirmed findings based on evidence. |
-| 🛡️ **Safe verification** Validate findings with non-destructive checks, without exploitation. | 🔁 **Scan diffing** Compare scan history to identify new assets, ports, technologies and findings. |
-| 🔔 **CVE monitor** Match newly published CVEs against stored technologies and send alerts. | 📄 **Unified reports** Prioritized HTML report plus machine-readable JSON. |
+| 🧠 **CVE correlation** Connect detected service and technology evidence with known vulnerabilities, prioritized with **EPSS** exploitation-probability scores. | 📊 **Confidence scoring** Separate possible, likely and confirmed findings based on evidence, plus a **source-confidence score** per asset from how many independent tools found it. |
+| 🛡️ **Safe verification** Validate findings with non-destructive checks, without exploitation — every finding carries `exploited: false`. | 🔁 **Scan diffing** Compare scan history to identify new assets, ports, technologies and findings. |
+| 🔔 **CVE monitor** Match newly published CVEs against stored technologies and send alerts. | 📄 **Unified reports** Prioritized, filterable HTML report (Triage and Engagement views) plus machine-readable JSON. |
+| 🧭 **OWASP Top 10 mapping** Every finding is tagged with its OWASP Top 10 (2021) category; the report shows how much of the Top 10 was actually tested. | 🕸️ **Knowledge Graph** *(planned)* — link assets, services, technologies and CVEs together so questions like "what else shares this certificate?" have an answer, not just a list. |
 
 ## 🔬 How it works
 
@@ -94,6 +99,24 @@ A version match alone does **not** prove a target is vulnerable. The confidence 
 
 Distribution backports, inaccurate banners and other version-matching pitfalls must be taken into account.
 
+### Detection, not exploitation
+
+Every check Marsadix runs — from a Nuclei template to a custom XSS/SQLi probe — stops at **verification**. No payload extracts data, changes state or executes code. Every finding carries `exploited: false`, always.
+
+Results use three states instead of a binary "vulnerable / not vulnerable":
+
+| Status | Meaning |
+| --- | --- |
+| 🔴 **Detected** | Clear evidence found (a payload reflected unescaped, a response delay matching a time-based probe, an exposed panel responding) |
+| 🟠 **Needs Review** | A partial signal (unusual timing or response-size change) — inconclusive, worth a manual look |
+| ⚪ **No Indicators** | The automated checks found nothing. This is **not** the same as "not vulnerable" — detection relies on a fixed set of payloads and can miss custom logic, WAF-filtered variants, or anything outside what was tested |
+
+Every report includes a **Detection Limitations** section making this explicit, instead of letting a clean scan be read as a clean bill of health.
+
+### Source confidence
+
+A subdomain found by one passive source is weaker evidence than one confirmed by several independent tools *and* DNS resolution *and* a live HTTP response. Marsadix records **every source that found each asset** and derives a 0–100 confidence score from that, rather than treating "discovered" as a single yes/no fact.
+
 ## 🔔 CVE monitor
 
 Reconnaissance is usually a one-time snapshot, but new vulnerabilities are published every day. The CVE monitor turns the technology inventory into a watch list.
@@ -123,22 +146,32 @@ Each scan is stored, and Marsadix compares it with previous ones to answer: *wha
 
 > Only test systems you own or have explicit permission to assess. Follow the target's rules of engagement and bug bounty scope.
 
-## 💻 Planned command-line interface
+## 💻 Command-line interface
 
-Marsadix is a command-line tool, designed to run in terminals, scripts and automation pipelines.
-
-> The commands below are an **illustrative design draft** and are not implemented yet. Names and options may change.
+Marsadix is a command-line tool, designed to run in terminals, scripts and automation pipelines. The commands below are **implemented and working today**; a command whose underlying module isn't written yet (see [Roadmap](#️-roadmap)) reports that explicitly instead of silently doing nothing.
 
 ```bash
 # Run a scope-checked scan on an authorized domain
-marsadix scan example.com --scope scope.txt --safe-mode
+marsadix scan example.com --scope scope.txt
 
-# Compare the latest scan with the previous one
+# Compare the latest scan with the previous one (or two specific scan IDs)
 marsadix diff example.com
+marsadix diff example.com --old 3 --new 7
+
+# Generate the HTML + JSON report for the latest scan
+marsadix report example.com --out output
 
 # Check new CVEs against stored technologies and send alerts
-marsadix monitor
+marsadix monitor --dry-run
+
+# Check whether hosts fall inside an authorized scope file
+marsadix scope scope.txt dev.example.com api.example.com
+
+# Check which external tools (subfinder, nmap, nuclei...) are installed
+marsadix doctor
 ```
+
+Every scan is scope-checked before anything runs, is stored so it can be diffed against later scans, and automatically raises an alert the moment a new subdomain or newly opened port appears (deduplicated, so re-running never re-sends the same alert).
 
 ## 🧰 Planned technology stack
 
@@ -178,20 +211,35 @@ The differences this project aims for are the combination of recursive recon wit
 
 ## 🗺️ Roadmap
 
-### MVP
+### Core engine
 
-- [ ] Passive and active reconnaissance
+- [x] Authorization-first scope manager (wildcards, CIDR ranges, exclusions)
+- [x] Scan pipeline: stages auto-discovered, missing ones skip cleanly, a crash in one never stops the others
+- [x] Local SQLite database: assets, services, technologies, findings, CVEs, alerts, scan history
+- [x] Confidence levels (possible / likely / confirmed) and alert priority scoring
+- [x] Alert deduplication (never resend the same alert twice)
+- [x] Scan-to-scan diffing (new/removed assets, ports, technologies, findings)
+- [x] Automatic new-asset / new-port alerts after every scan
+- [x] HTML report (Triage + Engagement views) and JSON report
+- [x] OWASP Top 10 (2021) coverage mapping, with a Detection Limitations disclosure
+- [x] Three-state detection status (Detected / Needs Review / No Indicators) — never reports absence of evidence as absence of risk
+- [x] Source-confidence scoring per discovered asset
+- [x] Docker packaging
+- [x] Schema-version check with an actionable error message instead of a raw SQL error
+- [ ] Knowledge Graph (link assets/services/technologies/CVEs; "what else shares this?" queries)
+- [ ] `--mode passive/standard/full` enforcement and an explicit opt-in flag for injection checks
+- [ ] SARIF and PDF report export (CSV export is done)
+- [ ] Reproducible benchmarks against existing tools
+
+### Discovery and detection modules (built on the engine above)
+
+- [ ] Passive and active reconnaissance (subfinder, amass, crt.sh, dnsx, httpx, naabu, nmap, CDN/ASN detection)
 - [ ] Recursive recon with scope enforcement and depth limit
-- [ ] CDN detection and scope filtering
+- [ ] Permutation (alterx/dnsgen) and DNS bruteforcing with wildcard filtering
 - [ ] Collection of URLs, JavaScript files, endpoints, technologies and public emails
-- [ ] Local database storing assets, technologies and scan history
-- [ ] Service/technology-to-CVE correlation and confidence levels
-- [ ] Web checks using Nuclei and safe verification mode
-- [ ] HTML and JSON reporting
-- [ ] Scan-to-scan diffing
-- [ ] CVE monitor with alerts (NVD and CISA KEV, one alert channel)
-- [ ] Docker packaging
-- [ ] Reproducible benchmarks
+- [ ] Web checks using Nuclei (takeover, exposures, CVE templates) plus custom detection skills (XSS, SQLi, SSTI...) sourced from documented methodologies (PortSwigger, PayloadsAllTheThings, OWASP Testing Guide)
+- [ ] CVE monitor: NVD + CISA KEV sync, EPSS scoring, CPE matching
+- [ ] Alert delivery: Discord, Telegram, email, generic webhook
 
 ### Stretch goals
 
@@ -199,11 +247,14 @@ The differences this project aims for are the combination of recursive recon wit
 - [ ] Import `.nessus` exports
 - [ ] Deeper network assessment module
 - [ ] Scheduled scans
-- [ ] Additional alert channels
+- [ ] Attack Path Time Machine (visualize how the attack surface evolved scan over scan)
+- [ ] Misconfiguration Pattern Hunter (cluster related findings into one root-cause issue instead of listing each separately)
 
 ## 🧪 Testing & evaluation
 
-Planned testing environments include:
+The core engine is covered by an automated test suite (`python -m pytest -q`) that runs on every change — no real network calls, no external tools required to run it.
+
+Planned testing environments for the discovery/detection modules, once written, include:
 
 - Local labs such as [OWASP Juice Shop](https://github.com/juice-shop/juice-shop) and [DVWA](https://github.com/digininja/DVWA).
 - Personal lab infrastructure.
@@ -214,9 +265,25 @@ The project plan includes benchmarking selected existing tools on the same autho
 
 ## 🚀 Getting started
 
-Installation and run instructions will be added when the implementation and supported environment are established.
+**Docker (fastest, every tool pre-installed):**
 
-The first runnable release should document prerequisites, installation, authorized-scope configuration, safe scan commands, and the location of HTML, JSON and diff outputs.
+```bash
+docker build -t marsadix .
+docker run --rm -v marsadix-data:/data marsadix doctor
+docker run --rm -v marsadix-data:/data marsadix scan example.com
+docker run --rm -v marsadix-data:/data marsadix report example.com --out /data/output
+```
+
+**From source** (for development — see [`TEAM_GUIDE.md`](TEAM_GUIDE.md) for the full step-by-step, including installing the external recon tools):
+
+```bash
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\Activate.ps1
+pip install -e .
+cp .env.example .env        # fill in whichever API keys you have; empty ones are skipped
+marsadix doctor             # check which external tools are found
+marsadix scan example.com --scope scope.txt
+marsadix report example.com --out output
+```
 
 ## 🤝 Contributing
 
