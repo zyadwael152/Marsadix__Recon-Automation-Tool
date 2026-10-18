@@ -441,9 +441,17 @@ def get_owasp_coverage(conn, scan_id: int) -> dict:
 
 def upsert_graph_node(conn, node_id: str, node_type: str, label: str,
                        scan_id: Optional[int] = None, attrs: Optional[dict] = None) -> None:
+    # Deliberately NOT "INSERT OR REPLACE": on a PRIMARY KEY conflict that
+    # deletes-then-reinserts the row, and graph_edges references
+    # graph_nodes(id) with ON DELETE CASCADE -- so re-upserting a node that
+    # already has edges (e.g. two hosts sharing one IP node) would silently
+    # wipe every edge already pointing at it. ON CONFLICT DO UPDATE updates
+    # the row in place, so existing edges survive.
     conn.execute(
-        "INSERT OR REPLACE INTO graph_nodes (id, node_type, label, scan_id, attrs) "
-        "VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO graph_nodes (id, node_type, label, scan_id, attrs) VALUES (?, ?, ?, ?, ?) "
+        "ON CONFLICT(id) DO UPDATE SET "
+        "node_type=excluded.node_type, label=excluded.label, "
+        "scan_id=excluded.scan_id, attrs=excluded.attrs",
         (node_id, node_type, label, scan_id, json.dumps(attrs or {})))
     conn.commit()
 
