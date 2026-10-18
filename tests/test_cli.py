@@ -38,9 +38,71 @@ def test_target_outside_scope_is_refused(tmp_path, capsys):
 
 def test_unimplemented_commands_exit_3(tmp_path, capsys):
     dbp = str(tmp_path / "t.db")
-    for cmd in (["monitor"], ["diff", "example.com"], ["report", "example.com"]):
-        assert main(["--db", dbp] + cmd) == 3
+    assert main(["--db", dbp, "monitor"]) == 3
     assert "not implemented yet" in capsys.readouterr().err
+
+
+def test_report_needs_a_scan(tmp_path, capsys):
+    dbp = str(tmp_path / "t.db")
+    assert main(["--db", dbp, "report", "example.com"]) == 1
+    assert "no completed scans found" in capsys.readouterr().err
+
+
+def test_report_writes_html_and_json(tmp_path, capsys):
+    dbp = str(tmp_path / "t.db")
+    out = str(tmp_path / "out")
+    main(["--db", dbp, "scan", "example.com"])
+    capsys.readouterr()
+    assert main(["--db", dbp, "report", "example.com", "--out", out]) == 0
+    files = list((tmp_path / "out").glob("*"))
+    names = {f.name for f in files}
+    assert any(n.endswith("_report.html") for n in names)
+    assert any(n.endswith("_report.json") for n in names)
+
+
+def test_scan_default_mode_is_passive(tmp_path, capsys):
+    dbp = str(tmp_path / "t.db")
+    main(["--db", dbp, "scan", "example.com"])
+    out = capsys.readouterr().out
+    assert "[mode=passive]" in out
+
+
+def test_scan_accepts_explicit_mode(tmp_path, capsys):
+    dbp = str(tmp_path / "t.db")
+    main(["--db", dbp, "scan", "example.com", "--mode", "full"])
+    out = capsys.readouterr().out
+    assert "[mode=full]" in out
+
+
+def test_scan_rejects_invalid_mode(tmp_path, capsys):
+    dbp = str(tmp_path / "t.db")
+    with pytest.raises(SystemExit) as exc:
+        main(["--db", dbp, "scan", "example.com", "--mode", "bogus"])
+    assert exc.value.code == 2  # argparse's own validation
+
+
+def test_graph_not_implemented_yet(tmp_path, capsys):
+    dbp = str(tmp_path / "t.db")
+    assert main(["--db", dbp, "graph", "example.com"]) == 3
+    assert "not implemented yet" in capsys.readouterr().err
+
+
+def test_diff_needs_two_scans(tmp_path, capsys):
+    dbp = str(tmp_path / "t.db")
+    assert main(["--db", dbp, "diff", "example.com"]) == 1
+    assert "need at least 2 scans" in capsys.readouterr().err
+
+
+def test_diff_runs_after_two_scans(tmp_path, capsys):
+    dbp = str(tmp_path / "t.db")
+    main(["--db", dbp, "scan", "example.com"])
+    capsys.readouterr()
+    main(["--db", dbp, "scan", "example.com"])
+    capsys.readouterr()
+    assert main(["--db", dbp, "diff", "example.com"]) == 0
+    out = capsys.readouterr().out
+    assert "Diff for example.com" in out
+    assert "New assets" in out
 
 
 def test_scope_command(tmp_path, capsys):
