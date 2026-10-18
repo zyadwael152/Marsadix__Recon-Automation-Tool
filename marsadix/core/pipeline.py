@@ -9,6 +9,7 @@ is skipped, so everyone can plug in without touching this file:
     web    -> marsadix/web/stage.py   : run(ctx)     (Person 2)
     asm    -> marsadix/asm/stage.py   : run(ctx)     (Person 2)
     track  -> marsadix/core/diff.py   : run_stage(ctx)  (Person 5)
+    graph  -> marsadix/core/graph.py  : run_stage(ctx)  (Person 5)
 
 Inside a stage: use ctx.scope.is_in_scope(host) BEFORE touching any host, call
 the wrappers (pure functions that return lists of models), then save with
@@ -34,6 +35,7 @@ STAGES = [
     ("web", "marsadix.web.stage:run"),
     ("asm", "marsadix.asm.stage:run"),
     ("track", "marsadix.core.diff:run_stage"),
+    ("graph", "marsadix.core.graph:run_stage"),
 ]
 
 
