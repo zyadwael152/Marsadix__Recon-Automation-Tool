@@ -22,12 +22,26 @@ class ConfigError(ValueError):
     pass
 
 
+SCAN_MODES = ("passive", "standard", "full")
+
 # environment variable -> Config field
 ENV_MAP = {
     "MARSADIX_DB": "db_path",
     "MARSADIX_OUTPUT_DIR": "output_dir",
+    # CVE sources
     "NVD_API_KEY": "nvd_api_key",
+    # Recon data sources (R2)
+    "SHODAN_API_KEY": "shodan_api_key",
+    "CENSYS_API_KEY": "censys_api_key",
+    "SECURITYTRAILS_API_KEY": "securitytrails_api_key",
+    "VIRUSTOTAL_API_KEY": "virustotal_api_key",
+    "OTX_API_KEY": "otx_api_key",
+    "CHAOS_API_KEY": "chaos_api_key",
+    # Alert channels (M12, M14, M18)
     "DISCORD_WEBHOOK_URL": "discord_webhook",
+    "TELEGRAM_BOT_TOKEN": "telegram_bot_token",
+    "TELEGRAM_CHAT_ID": "telegram_chat_id",
+    "WEBHOOK_URL": "webhook_url",
 }
 
 
@@ -38,8 +52,26 @@ class Config:
     max_depth: int = 2            # recursion depth limit
     rate_limit: int = 50          # requests/second handed to the tools
     tool_timeout: int = 600       # seconds allowed per external tool
+    scan_mode: str = "passive"    # passive | standard | full               (C15)
+    allow_injection: bool = False  # explicit opt-in for injection checks   (A5)
+
+    # CVE sources
     nvd_api_key: str = field(default="", repr=False)
+
+    # Recon data sources (R2) - any of these may be empty; a source with no
+    # key is skipped, never fatal (see marsadix.recon.sources for the pattern)
+    shodan_api_key: str = field(default="", repr=False)
+    censys_api_key: str = field(default="", repr=False)
+    securitytrails_api_key: str = field(default="", repr=False)
+    virustotal_api_key: str = field(default="", repr=False)
+    otx_api_key: str = field(default="", repr=False)
+    chaos_api_key: str = field(default="", repr=False)
+
+    # Alert channels (M12, M14, M18)
     discord_webhook: str = field(default="", repr=False)
+    telegram_bot_token: str = field(default="", repr=False)
+    telegram_chat_id: str = field(default="", repr=False)
+    webhook_url: str = field(default="", repr=False)
 
     def validate(self) -> None:
         if self.max_depth < 0:
@@ -48,6 +80,12 @@ class Config:
             raise ConfigError("rate_limit must be >= 1")
         if self.tool_timeout < 1:
             raise ConfigError("tool_timeout must be >= 1")
+        if self.scan_mode not in SCAN_MODES:
+            raise ConfigError(f"scan_mode must be one of {SCAN_MODES}")
+
+    def has_source_key(self, name: str) -> bool:
+        """e.g. cfg.has_source_key('shodan') -> bool. Used to skip sources cleanly."""
+        return bool(getattr(self, f"{name}_api_key", ""))
 
 
 def load_dotenv(path: str = ".env") -> None:
