@@ -48,15 +48,34 @@ else
     log_info "venv already exists, skipping creation."
 fi
 
-log_info "Installing Python requirements into venv..."
-if [ -f requirements.txt ]; then
-    ./venv/bin/pip install --upgrade pip --quiet
-    ./venv/bin/pip install -r requirements.txt --quiet
+# 4. Install the marsadix package itself, in editable mode, from
+#    pyproject.toml - this project has no requirements.txt by design (see
+#    pyproject.toml: dependencies = []), so `pip install -e .` is both how
+#    the `marsadix` command gets registered on PATH AND how any future
+#    runtime dependency gets installed, all from the one place that
+#    actually declares them.
+RUN_AS_USER() {
+    if [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
+        sudo -u "$REAL_USER" "$@"
+    else
+        "$@"
+    fi
+}
+
+log_info "Installing the marsadix package (editable) into the venv..."
+RUN_AS_USER ./venv/bin/pip install --upgrade pip --quiet
+if RUN_AS_USER ./venv/bin/pip install -e . --quiet; then
+    log_ok "marsadix installed into venv/bin/marsadix"
 else
-    log_err "No requirements.txt found - skipping Python deps."
+    log_err "pip install -e . failed - check the output above."
 fi
 
-# 4. Make sure the whole project folder is owned by the real user, not root,
+if [ -f requirements.txt ]; then
+    log_info "requirements.txt found too - installing it as well..."
+    RUN_AS_USER ./venv/bin/pip install -r requirements.txt --quiet
+fi
+
+# 5. Make sure the whole project folder is owned by the real user, not root,
 #    even though install-tools.sh needed sudo - this is the exact
 #    "permission changed" problem to avoid on the next run.
 if [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
@@ -64,11 +83,11 @@ if [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
     chown -R "$REAL_USER":"$REAL_USER" "$SCRIPT_DIR"
 fi
 
-# 5. Final verification - confirm every external tool is actually reachable.
+# 6. Final verification - confirm every external tool is actually reachable.
 echo ""
 echo -e "${BLUE}=== Tool check ===${RESET}"
 MISSING=0
-for t in subfinder assetfinder amass findomain chaos httpx dnsx naabu nuclei gau ffuf; do
+for t in subfinder assetfinder amass findomain chaos httpx dnsx naabu katana nuclei gau ffuf nmap; do
     if command -v "$t" &>/dev/null; then
         echo -e "  ${GREEN}[OK]${RESET}   $t"
     else
@@ -77,9 +96,23 @@ for t in subfinder assetfinder amass findomain chaos httpx dnsx naabu nuclei gau
     fi
 done
 
+# 7. Confirm the marsadix CLI itself is actually callable before declaring success.
+echo ""
+echo -e "${BLUE}=== marsadix package check ===${RESET}"
+if ./venv/bin/marsadix --help &>/dev/null; then
+    echo -e "  ${GREEN}[OK]${RESET}   marsadix command is installed (venv/bin/marsadix)"
+else
+    echo -e "  ${RED}[MISSING]${RESET} marsadix command not found - 'pip install -e .' may have failed above"
+    MISSING=1
+fi
+
 echo ""
 if [ "$MISSING" -eq 0 ]; then
     log_ok "Setup complete. Every tool is installed."
+else
+    log_err "Some tools (or the marsadix command itself) are still missing - open a NEW terminal (PATH may need a refresh) and re-run ./setup.sh"
+fi
+log_info "Activate the venv with: source venv/bin/activate"
 else
     log_err "Some tools are still missing - open a NEW terminal (PATH may need a refresh) and re-run ./setup.sh"
 fi
