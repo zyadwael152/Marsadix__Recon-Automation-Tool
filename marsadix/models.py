@@ -5,7 +5,7 @@ This file only describes the SHAPE of the data as Python classes.
 It does NOT talk to any database. Storage lives in db.py.
 
 Contract between modules:
-  Recon        -> produces Asset, Service, Technology, WebItem, Email
+  Recon        -> produces Asset, AssetSource, Service, Technology, WebItem, Email
   ASM (Nuclei) -> produces Finding (source=nuclei)
   CVE Monitor  -> produces CVE, Finding (source=cve_match), Alert
   Asset Monitor-> produces TrackedAsset updates, Alert (new_asset / takeover)
@@ -43,6 +43,13 @@ class ScanStatus(str, Enum):
     FAILED = "failed"
 
 
+class ScanMode(str, Enum):
+    """How intrusive a scan is allowed to be. (C15)"""
+    PASSIVE = "passive"      # no direct contact with the target
+    STANDARD = "standard"    # + resolve, probe, port scan
+    FULL = "full"             # + active web checks, nuclei, injection detection
+
+
 class Confidence(str, Enum):
     POSSIBLE = "possible"    # version match only          -> Low
     LIKELY = "likely"        # template/banner-specific    -> Medium
@@ -63,6 +70,8 @@ class DiscoverySource(str, Enum):
     JS = "js"                # found inside a JavaScript file
     REDIRECT = "redirect"
     CT_LOG = "ct_log"        # Certificate Transparency monitoring
+    PERMUTATION = "permutation"  # alterx / dnsgen generated, then resolved
+    BRUTEFORCE = "bruteforce"    # puredns wordlist bruteforce
     MANUAL = "manual"        # seed target given by the user
 
 
@@ -76,6 +85,18 @@ class WebItemKind(str, Enum):
 class FindingSource(str, Enum):
     NUCLEI = "nuclei"        # ASM: a template actually matched on the asset
     CVE_MATCH = "cve_match"  # version/CPE matched a known CVE
+    SKILL = "skill"          # custom detection skill (XSS, SQLi, SSTI...)  (A8)
+
+
+class DetectionStatus(str, Enum):
+    """
+    Three-state result instead of a binary "vulnerable / not vulnerable". (A10)
+    Automated detection has false negatives: absence of evidence is not
+    evidence of absence, so "no_indicators" must never be reported as "safe".
+    """
+    DETECTED = "detected"            # clear evidence found
+    NEEDS_REVIEW = "needs_review"    # partial signal (timing/size change), inconclusive
+    NO_INDICATORS = "no_indicators"  # no signal found; does NOT mean "not vulnerable"
 
 
 class AlertType(str, Enum):
@@ -128,6 +149,7 @@ class Scan(_Model):
     max_depth: int = 2
     scope_file: Optional[str] = None
     rate_limit: Optional[int] = None              # requests/second
+    mode: ScanMode = ScanMode.PASSIVE              # (C15)
 
 
 @dataclass
@@ -143,9 +165,23 @@ class Asset(_Model):
     asn: Optional[str] = None
     asn_owner: Optional[str] = None
     depth: int = 0                                # 0 = seed
-    source: DiscoverySource = DiscoverySource.PASSIVE
+    source: DiscoverySource = DiscoverySource.PASSIVE  # the FIRST/primary source
     parent_host: Optional[str] = None
     first_seen: str = field(default_factory=utcnow)
+    confidence_score: int = 0                     # 0-100, see compute_source_confidence (R4)
+
+
+@dataclass
+class AssetSource(_Model):
+    """
+    One row per (scan_id, host, source_name).
+    Many rows for the same host = higher confidence it really exists. (R3/R4)
+    """
+    scan_id: int
+    host: str
+    source_name: str          # e.g. "subfinder", "shodan", "crt.sh", "amass"
+    id: Optional[int] = None
+    found_at: str = field(default_factory=utcnow)
 
 
 @dataclass
@@ -239,6 +275,7 @@ class CVE(_Model):
     cve_id: str
     description: str = ""
     cvss_score: Optional[float] = None
+    epss_score: Optional[float] = None             # 0.0-1.0 probability of exploitation (M13)
     severity: Severity = Severity.INFO
     published: Optional[str] = None
     modified: Optional[str] = None
@@ -250,9 +287,13 @@ class CVE(_Model):
 @dataclass
 class Finding(_Model):
     """
-    Something wrong found on an asset. Two sources:
+    Something wrong found on an asset. Three sources:
       - nuclei    : template matched (takeover, exposure, injection...) - cve_id may be empty
       - cve_match : technology version matched a CVE
+      - skill     : custom detection skill (XSS, SQLi, SSTI...)            (A8)
+
+    Marsadix stops at verification: exploited is always False. Exploitation
+    is explicitly out of scope for this tool.
     """
     scan_id: int
     host: str
@@ -260,7 +301,7 @@ class Finding(_Model):
     source: FindingSource = FindingSource.NUCLEI
     cve_id: Optional[str] = None
     title: str = ""
-    template_id: Optional[str] = None             # nuclei template id
+    template_id: Optional[str] = None             # nuclei template id, or skill name
     url: Optional[str] = None
     technology: Optional[str] = None
     port: Optional[int] = None
@@ -272,6 +313,11 @@ class Finding(_Model):
     in_kev: bool = False
     found_at: str = field(default_factory=utcnow)
     dedup_key: str = ""
+    # --- added fields ---
+    owasp_category: Optional[str] = None           # "A03:2021-Injection"              (A7)
+    source_reference: Optional[str] = None         # "PortSwigger SSTI methodology"     (A9)
+    status: DetectionStatus = DetectionStatus.NO_INDICATORS                             # (A10)
+    exploited: bool = False                        # always False; detection only, never exploitation
 
     def __post_init__(self):
         if not self.dedup_key:
@@ -311,14 +357,16 @@ class Alert(_Model):
 
 
 def compute_alert_priority(
-    severity: Severity, in_kev: bool, confidence: Confidence
+    severity: Severity, in_kev: bool, confidence: Confidence, epss_score: Optional[float] = None
 ) -> AlertPriority:
-    """CVE alerts: severity + known exploitation + how sure we are."""
+    """CVE alerts: severity + known exploitation + how sure we are + exploit probability."""
     base = {Severity.INFO: 0, Severity.LOW: 1, Severity.MEDIUM: 2,
             Severity.HIGH: 3, Severity.CRITICAL: 4}[severity]
     if in_kev:
         base += 2
     base += {Confidence.POSSIBLE: -1, Confidence.LIKELY: 0, Confidence.CONFIRMED: 1}[confidence]
+    if epss_score is not None and epss_score >= 0.5:
+        base += 1
     if base >= 6:
         return AlertPriority.URGENT
     if base >= 4:
@@ -336,6 +384,17 @@ def default_priority(alert_type: AlertType) -> AlertPriority:
         AlertType.TAKEOVER: AlertPriority.HIGH,
         AlertType.CVE: AlertPriority.LOW,
     }[alert_type]
+
+
+def compute_source_confidence(source_count: int, resolved: bool, http_alive: bool) -> int:
+    """
+    0-100 confidence score for a discovered subdomain. (R4)
+    More independent sources + DNS resolution + a live HTTP response = higher confidence.
+    """
+    score = min(source_count * 20, 60)
+    score += 20 if resolved else 0
+    score += 20 if http_alive else 0
+    return score
 
 
 # --------------------------------------------------------------------------
