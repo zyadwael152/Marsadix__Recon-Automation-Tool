@@ -1,97 +1,220 @@
-import pytest
-from marsadix import db
-from marsadix.cli import main
-from marsadix.core.config import ConfigError, load_config
+"""
+Scan-to-scan diffing  (Core role owns this file).
+
+Two jobs, two entry points, same comparison engine underneath:
+
+  run_stage(ctx)   - called automatically at the end of EVERY scan (the
+                      "track" stage in pipeline.py). Updates tracked_assets
+                      and raises Alerts for new subdomains / new ports. (C9)
+
+  run_diff(conn, target, old_id=None, new_id=None) -> int
+                      - called by `marsadix diff <target>`. Prints a
+                      human-readable comparison of the last two scans
+                      (or two given scan ids). (C8)
+
+  compute_diff(conn, old_id, new_id) -> ScanDiff
+                      - the reusable engine both of the above (and the
+                      report builder, and the Attack Path Time Machine)
+                      call. Pure: reads the DB, returns a dataclass,
+                      writes nothing.
+
+  get_target_timeline(conn, target) -> list[dict]
+                      - one row per scan of a target, oldest first, with
+                      basic counts. Foundation for the Attack Path Time
+                      Machine (C17): walk this list and diff consecutive
+                      pairs to see how the attack surface evolved.
+"""
+
+from __future__ import annotations
+
+import logging
+import sys
+from typing import Optional
+
+from .. import db
+from ..models import Alert, AlertChannel, AlertType, ScanDiff, default_priority
+
+log = logging.getLogger(__name__)
 
 
-@pytest.fixture(autouse=True)
-def _isolate(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)          # no stray config.toml / .env
-    for k in ("NVD_API_KEY", "DISCORD_WEBHOOK_URL", "MARSADIX_DB", "MARSADIX_OUTPUT_DIR"):
-        monkeypatch.delenv(k, raising=False)
+# --------------------------------------------------------------------------
+# comparison engine (pure: no writes)
+# --------------------------------------------------------------------------
+
+def compute_diff(conn, old_id: int, new_id: int) -> ScanDiff:
+    """Compare two scans of the SAME target. Caller picks which two."""
+    old_assets = {r["host"] for r in db.get_assets(conn, old_id)}
+    new_assets = {r["host"] for r in db.get_assets(conn, new_id)}
+
+    old_ports = {f'{r["host"]}:{r["port"]}' for r in db.get_services(conn, old_id)}
+    new_ports = {f'{r["host"]}:{r["port"]}' for r in db.get_services(conn, new_id)}
+
+    old_tech = {(r["host"], r["name"]): r["version"] for r in db.get_technologies(conn, old_id)}
+    new_tech = {(r["host"], r["name"]): r["version"] for r in db.get_technologies(conn, new_id)}
+    changed_tech = [
+        f"{host}: {name} {old_tech[(host, name)] or '?'} -> {ver or '?'}"
+        for (host, name), ver in new_tech.items()
+        if (host, name) in old_tech and old_tech[(host, name)] != ver
+    ]
+
+    old_findings = {r["dedup_key"]: r for r in db.get_findings(conn, old_id)}
+    new_findings = {r["dedup_key"]: r for r in db.get_findings(conn, new_id)}
+    new_keys = set(new_findings) - set(old_findings)
+    resolved_keys = set(old_findings) - set(new_findings)
+
+    return ScanDiff(
+        old_scan_id=old_id,
+        new_scan_id=new_id,
+        new_assets=sorted(new_assets - old_assets),
+        removed_assets=sorted(old_assets - new_assets),
+        new_ports=sorted(new_ports - old_ports),
+        closed_ports=sorted(old_ports - new_ports),
+        changed_technologies=sorted(changed_tech),
+        new_findings=sorted(f'{new_findings[k]["host"]}: {new_findings[k]["title"]}' for k in new_keys),
+        resolved_findings=sorted(f'{old_findings[k]["host"]}: {old_findings[k]["title"]}' for k in resolved_keys),
+    )
 
 
-def test_scan_runs_and_stores_scan(tmp_path, capsys):
-    dbp = str(tmp_path / "t.db")
-    assert main(["--db", dbp, "scan", "example.com"]) == 0
-    out = capsys.readouterr().out
-    assert "completed" in out and "(baseline)" in out
-    assert "skipped" in out                       # stages not written yet
-    conn = db.connect(dbp)
-    assert conn.execute("SELECT COUNT(*) FROM scans").fetchone()[0] == 1
+def get_target_timeline(conn, target: str) -> list[dict]:
+    """
+    One entry per scan of `target`, oldest first, with basic counts.
+    Used by `marsadix graph`/report "Attack Path Time Machine" view (C17):
+    walk consecutive pairs through compute_diff() to see how the attack
+    surface evolved scan over scan.
+    """
+    scans = conn.execute(
+        "SELECT * FROM scans WHERE target=? ORDER BY started_at ASC", (target,)
+    ).fetchall()
+    timeline = []
+    for s in scans:
+        n_assets = conn.execute(
+            "SELECT COUNT(*) FROM assets WHERE scan_id=?", (s["id"],)).fetchone()[0]
+        n_findings = conn.execute(
+            "SELECT COUNT(*) FROM findings WHERE scan_id=?", (s["id"],)).fetchone()[0]
+        timeline.append({
+            "scan_id": s["id"],
+            "started_at": s["started_at"],
+            "status": s["status"],
+            "is_baseline": bool(s["is_baseline"]),
+            "asset_count": n_assets,
+            "finding_count": n_findings,
+        })
+    return timeline
 
 
-def test_second_scan_is_not_baseline(tmp_path, capsys):
-    dbp = str(tmp_path / "t.db")
-    main(["--db", dbp, "scan", "example.com"])
-    capsys.readouterr()
-    main(["--db", dbp, "scan", "example.com"])
-    assert "(baseline)" not in capsys.readouterr().out
+# --------------------------------------------------------------------------
+# "track" pipeline stage - runs automatically at the end of every scan (C9)
+# --------------------------------------------------------------------------
+
+def _previous_scan(conn, target: str, exclude_scan_id: int) -> Optional[dict]:
+    """The most recent COMPLETED scan of `target` before `exclude_scan_id`."""
+    row = conn.execute(
+        "SELECT * FROM scans WHERE target=? AND id<>? AND status='completed' "
+        "ORDER BY started_at DESC LIMIT 1",
+        (target, exclude_scan_id)).fetchone()
+    return dict(row) if row else None
 
 
-def test_target_outside_scope_is_refused(tmp_path, capsys):
-    scope = tmp_path / "scope.txt"
-    scope.write_text("*.example.com\n")           # apex NOT included
-    rc = main(["--db", str(tmp_path / "t.db"), "scan", "example.com", "--scope", str(scope)])
-    assert rc == 1 and "not in scope" in capsys.readouterr().err
+def run_stage(ctx) -> None:
+    """
+    Pipeline stage "track". Called once, automatically, after recon/web/asm
+    for every scan. Two things:
+      1. update tracked_assets + alert on genuinely NEW subdomains (not on
+         the very first/baseline scan of a target).
+      2. diff ports against the previous completed scan + alert on newly
+         opened ports.
+    Alerts are deduplicated by db.save_alert_if_new (M11): re-running never
+    re-sends the same alert twice.
+    """
+    conn = ctx.conn
+    target = ctx.target
+    cur_id = ctx.scan.id
+
+    cur_hosts = [r["host"] for r in db.get_assets(conn, cur_id) if r["in_scope"]]
+    new_hosts, gone_hosts, is_baseline = db.update_tracked_assets(conn, target, cur_hosts, cur_id)
+
+    if is_baseline:
+        log.info("track: baseline scan for %s (%d hosts), no new-asset alerts", target, len(cur_hosts))
+    else:
+        for host in new_hosts:
+            alert = Alert(
+                alert_type=AlertType.NEW_ASSET,
+                host=host,
+                title=f"New subdomain discovered: {host}",
+                details=f"First seen in scan #{cur_id}",
+                priority=default_priority(AlertType.NEW_ASSET),
+                channel=AlertChannel.DISCORD,
+            )
+            if db.save_alert_if_new(conn, alert):
+                log.info("track: new asset alert queued for %s", host)
+        for host in gone_hosts:
+            log.info("track: asset no longer seen: %s", host)
+
+    prev = _previous_scan(conn, target, cur_id)
+    if prev is None:
+        return  # nothing to diff ports against yet
+
+    diff = compute_diff(conn, prev["id"], cur_id)
+    for entry in diff.new_ports:
+        host, _, port = entry.partition(":")
+        alert = Alert(
+            alert_type=AlertType.NEW_PORT,
+            host=host,
+            title=f"New open port: {entry}",
+            details=f"Open in scan #{cur_id}, closed in scan #{prev['id']}",
+            priority=default_priority(AlertType.NEW_PORT),
+            channel=AlertChannel.DISCORD,
+        )
+        if db.save_alert_if_new(conn, alert):
+            log.info("track: new port alert queued for %s", entry)
 
 
-def test_unimplemented_commands_exit_3(tmp_path, capsys):
-    dbp = str(tmp_path / "t.db")
-    for cmd in (["monitor"], ["report", "example.com"]):
-        assert main(["--db", dbp] + cmd) == 3
-    assert "not implemented yet" in capsys.readouterr().err
+# --------------------------------------------------------------------------
+# `marsadix diff <target>` CLI command (C8)
+# --------------------------------------------------------------------------
+
+def _print_diff(diff: ScanDiff, target: str, old_id: int, new_id: int) -> None:
+    def section(title: str, items: list[str]) -> None:
+        print(f"\n{title} ({len(items)})")
+        for item in items[:50]:
+            print(f"  + {item}" if title.startswith(("New", "Resolved")) else f"  - {item}")
+        if len(items) > 50:
+            print(f"  ... and {len(items) - 50} more")
+
+    print(f"Diff for {target}: scan #{old_id} -> scan #{new_id}")
+    section("New assets", diff.new_assets)
+    section("Removed assets", diff.removed_assets)
+    section("New open ports", diff.new_ports)
+    section("Closed ports", diff.closed_ports)
+    section("Changed technologies", diff.changed_technologies)
+    section("New findings", diff.new_findings)
+    section("Resolved findings", diff.resolved_findings)
+    if not any([diff.new_assets, diff.removed_assets, diff.new_ports, diff.closed_ports,
+                diff.changed_technologies, diff.new_findings, diff.resolved_findings]):
+        print("\nNo changes between these two scans.")
 
 
-def test_diff_needs_two_scans(tmp_path, capsys):
-    dbp = str(tmp_path / "t.db")
-    assert main(["--db", dbp, "diff", "example.com"]) == 1
-    assert "need at least 2 scans" in capsys.readouterr().err
+def run_diff(conn, target: str, old_id: Optional[int] = None, new_id: Optional[int] = None) -> int:
+    """Entry point for `marsadix diff`. Returns a process exit code."""
+    if old_id is None or new_id is None:
+        scans = db.get_latest_scans(conn, target, limit=2)
+        if len(scans) < 2:
+            print(f"error: need at least 2 scans of {target!r} to diff "
+                  f"(found {len(scans)}). Run `marsadix scan {target}` again first.",
+                  file=sys.stderr)
+            return 1
+        new_id = new_id if new_id is not None else scans[0]["id"]
+        old_id = old_id if old_id is not None else scans[1]["id"]
 
+    old_row = conn.execute("SELECT id FROM scans WHERE id=?", (old_id,)).fetchone()
+    new_row = conn.execute("SELECT id FROM scans WHERE id=?", (new_id,)).fetchone()
+    if old_row is None or new_row is None:
+        print(f"error: scan id not found (old={old_id}, new={new_id})", file=sys.stderr)
+        return 1
 
-def test_diff_runs_after_two_scans(tmp_path, capsys):
-    dbp = str(tmp_path / "t.db")
-    main(["--db", dbp, "scan", "example.com"])
-    capsys.readouterr()
-    main(["--db", dbp, "scan", "example.com"])
-    capsys.readouterr()
-    assert main(["--db", dbp, "diff", "example.com"]) == 0
-    out = capsys.readouterr().out
-    assert "Diff for example.com" in out
-    assert "New assets" in out
-
-
-def test_scope_command(tmp_path, capsys):
-    scope = tmp_path / "scope.txt"
-    scope.write_text("*.example.com\n!mail.example.com\n")
-    main(["scope", str(scope), "dev.example.com", "mail.example.com", "evil.com"])
-    out = capsys.readouterr().out
-    assert "IN   dev.example.com" in out
-    assert "OUT  mail.example.com" in out and "OUT  evil.com" in out
-
-
-def test_doctor_runs(capsys):
-    assert main(["doctor"]) == 0
-    assert "External tools" in capsys.readouterr().out
-
-
-def test_config_toml_and_env(tmp_path, monkeypatch):
-    (tmp_path / "config.toml").write_text('max_depth = 5\nrate_limit = 10\n')
-    monkeypatch.setenv("NVD_API_KEY", "secret")
-    cfg = load_config()
-    assert cfg.max_depth == 5 and cfg.nvd_api_key == "secret"
-    assert "secret" not in repr(cfg)              # secrets never printed
-
-
-def test_config_rejects_unknown_key(tmp_path):
-    (tmp_path / "config.toml").write_text('bogus = 1\n')
-    with pytest.raises(ConfigError):
-        load_config()
-
-
-def test_failing_stage_marks_scan_failed(tmp_path, monkeypatch, capsys):
-    from marsadix.core import pipeline
-    def boom(ctx): raise RuntimeError("kaboom")
+    diff = compute_diff(conn, old_id, new_id)
+    _print_diff(diff, target, old_id, new_id)
+    return 0
     monkeypatch.setattr(pipeline, "load_callable", lambda p: boom if "recon" in p else None)
     assert main(["--db", str(tmp_path / "t.db"), "scan", "example.com"]) == 1
     out = capsys.readouterr().out
