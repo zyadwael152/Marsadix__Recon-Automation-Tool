@@ -149,3 +149,20 @@ def test_failing_stage_marks_scan_failed(tmp_path, monkeypatch, capsys):
     assert main(["--db", str(tmp_path / "t.db"), "scan", "example.com"]) == 1
     out = capsys.readouterr().out
     assert "failed" in out and "kaboom" in out
+
+
+def test_snapshots_needs_a_scan(tmp_path, capsys):
+    dbp = str(tmp_path / "t.db")
+    assert main(["--db", dbp, "snapshots", "example.com"]) == 1
+    assert "no scans found" in capsys.readouterr().err
+
+
+def test_snapshots_lists_scans(tmp_path, capsys):
+    dbp = str(tmp_path / "t.db")
+    main(["--db", dbp, "scan", "example.com"])
+    capsys.readouterr()
+    main(["--db", dbp, "scan", "example.com"])
+    capsys.readouterr()
+    assert main(["--db", dbp, "snapshots", "example.com"]) == 0
+    out = capsys.readouterr().out
+    assert "Snapshots for example.com (2 scan(s))" in out
