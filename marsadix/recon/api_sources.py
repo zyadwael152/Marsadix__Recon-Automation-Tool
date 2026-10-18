@@ -7,14 +7,13 @@ from typing import Set, Tuple
 logger = logging.getLogger(__name__)
 
 async def fetch_virustotal(domain: str, api_key: str = None) -> Tuple[str, Set[str]]:
-    """الاستعلام من VirusTotal وتخطي الفحص لو مفيش API Key"""
     subdomains = set()
     if not api_key:
-        logger.warning("[-] تم تخطي VirusTotal لعدم توفر API Key.")
+        logger.warning("[-] Skipped VirusTotal (No API Key provided).")
         return "virustotal", subdomains
         
     url = f"https://www.virustotal.com/api/v3/domains/{domain}/subdomains?limit=100"
-    logger.info("[*] جاري الاستعلام من VirusTotal...")
+    logger.info("[*] Querying VirusTotal...")
     try:
         loop = asyncio.get_event_loop()
         req = urllib.request.Request(url, headers={'x-apikey': api_key})
@@ -26,17 +25,16 @@ async def fetch_virustotal(domain: str, api_key: str = None) -> Tuple[str, Set[s
                 sub = item.get('id', '').lower()
                 if sub:
                     subdomains.add(sub)
-        logger.info(f"[+] VirusTotal اكتشفت {len(subdomains)} نطاق.")
+        logger.info(f"[+] VirusTotal discovered {len(subdomains)} subdomains.")
     except Exception as e:
-        logger.warning(f"[-] خطأ في VirusTotal: {e}")
+        logger.warning(f"[-] VirusTotal error: {e}")
         
     return "virustotal", subdomains
 
 async def fetch_alienvault(domain: str) -> Tuple[str, Set[str]]:
-    """الاستعلام من AlienVault OTX (لا يحتاج مفتاح)"""
     subdomains = set()
     url = f"https://otx.alienvault.com/api/v1/indicators/domain/{domain}/passive_dns"
-    logger.info("[*] جاري الاستعلام من AlienVault...")
+    logger.info("[*] Querying AlienVault...")
     try:
         loop = asyncio.get_event_loop()
         req = urllib.request.Request(url)
@@ -48,8 +46,8 @@ async def fetch_alienvault(domain: str) -> Tuple[str, Set[str]]:
                 sub = item.get('hostname', '').lower()
                 if sub:
                     subdomains.add(sub)
-        logger.info(f"[+] AlienVault اكتشفت {len(subdomains)} نطاق.")
+        logger.info(f"[+] AlienVault discovered {len(subdomains)} subdomains.")
     except Exception as e:
-        logger.warning(f"[-] خطأ في AlienVault: {e}")
+        logger.warning(f"[-] AlienVault error: {e}")
         
     return "alienvault", subdomains
