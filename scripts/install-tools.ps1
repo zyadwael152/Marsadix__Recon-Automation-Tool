@@ -1,183 +1,157 @@
-#!/usr/bin/env bash
-#
-# Marsadix - external tools installer (Linux/macOS)
-# Usage: sudo ./install-tools.sh
-#
-set -uo pipefail
+<#
+  Marsadix - installs the external tools on Windows (amd64).
 
-GREEN="\033[1;32m"
-BLUE="\033[1;34m"
-RED="\033[1;31m"
-YELLOW="\033[1;33m"
-RESET="\033[0m"
+  Usage (PowerShell):
+    powershell -ExecutionPolicy Bypass -File scripts\install-tools.ps1
+    powershell -ExecutionPolicy Bypass -File scripts\install-tools.ps1 -InstallDir D:\tools\bin -NoAddToPath
 
-FAILED=()
+  -InstallDir   where to put the .exe files (default: %USERPROFILE%\marsadix-tools\bin)
+  -NoAddToPath  skip adding that folder to YOUR user PATH (it is added by default now)
 
-log_info() { echo -e "${BLUE}[*] $1${RESET}"; }
-log_ok()   { echo -e "${GREEN}[+] $1${RESET}"; }
-log_warn() { echo -e "${YELLOW}[!] $1${RESET}"; }
-log_err()  { echo -e "${RED}[-] $1${RESET}"; }
+  naabu may ask for Npcap on Windows (https://npcap.com).
 
-echo -e "${BLUE}[*] Starting Marsadix Dependencies Installer...${RESET}"
+  NOTE: assetfinder / chaos / amass / findomain are installed by the Linux/macOS
+  script (install-tools.sh) but NOT by this script, because their release asset
+  names don't follow the same "<tool>_<ver>_windows_amd64.zip" pattern used by
+  the tools below, and guessing wrong filenames would silently ship a broken
+  installer. For full tool parity on Windows, either run the project under WSL,
+  or install Go for Windows and run `go install <pkg>@latest` for those four.
+#>
+param(
+  [string]$InstallDir = (Join-Path $env:USERPROFILE "marsadix-tools\bin"),
+  [switch]$NoAddToPath
+)
 
-# 1. Root check
-if [ "$EUID" -ne 0 ]; then
-  log_err "Please run this script with sudo: sudo ./install-tools.sh"
-  exit 1
-fi
+$ProgressPreference = 'SilentlyContinue'
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$Tmp = Join-Path $env:TEMP "marsadix-tools-tmp"
+New-Item -ItemType Directory -Force $InstallDir, $Tmp | Out-Null
 
-# 2. Detect package manager instead of assuming apt
-if command -v apt &>/dev/null; then
-    PKG_INSTALL="apt install -y"
-    PKG_UPDATE="apt update -y"
-elif command -v dnf &>/dev/null; then
-    PKG_INSTALL="dnf install -y"
-    PKG_UPDATE="dnf check-update || true"
-elif command -v pacman &>/dev/null; then
-    PKG_INSTALL="pacman -S --noconfirm"
-    PKG_UPDATE="pacman -Sy"
-elif command -v brew &>/dev/null; then
-    PKG_INSTALL="brew install"
-    PKG_UPDATE="brew update"
-else
-    log_err "No supported package manager found (apt/dnf/pacman/brew). Install base packages manually: curl wget git unzip python3 golang"
-    exit 1
-fi
+$tools = @(
+  @{ Name = "subfinder"; Owner = "projectdiscovery" },
+  @{ Name = "dnsx";      Owner = "projectdiscovery" },
+  @{ Name = "httpx";     Owner = "projectdiscovery" },
+  @{ Name = "naabu";     Owner = "projectdiscovery" },
+  @{ Name = "katana";    Owner = "projectdiscovery" },
+  @{ Name = "nuclei";    Owner = "projectdiscovery" },
+  @{ Name = "gau";       Owner = "lc" },
+  @{ Name = "ffuf";      Owner = "ffuf" }
+)
 
-log_info "Updating system and installing base prerequisites..."
-$PKG_UPDATE
-$PKG_INSTALL curl wget git unzip python3 python3-venv python3-pip || log_warn "Some base packages may have failed to install"
-
-# 3. Go: make sure a recent-enough version is present.
-#    Distro packages (apt's golang-go) are often too old for modern `go install pkg@latest`.
-MIN_GO_MINOR=21
-GO_TARBALL_VERSION="1.23.0"
-
-need_fresh_go() {
-    command -v go &>/dev/null || return 0
-    local ver major minor
-    ver=$(go version | grep -oE 'go[0-9]+\.[0-9]+' | tr -d 'go')
-    major=$(echo "$ver" | cut -d. -f1)
-    minor=$(echo "$ver" | cut -d. -f2)
-    [ "$major" -lt 1 ] && return 0
-    [ "$major" -eq 1 ] && [ "$minor" -lt "$MIN_GO_MINOR" ] && return 0
-    return 1
+function Get-LatestTag($owner, $repo) {
+  try {
+    $req = [System.Net.HttpWebRequest]::Create("https://github.com/$owner/$repo/releases/latest")
+    $req.AllowAutoRedirect = $false
+    $resp = $req.GetResponse()
+    $loc = $resp.Headers["Location"]
+    $resp.Close()
+    if (-not $loc) { throw "no redirect returned - repo may have no releases" }
+    return ($loc -split "/")[-1]
+  } catch {
+    throw "could not resolve latest release for $owner/$repo : $($_.Exception.Message)"
+  }
 }
 
-if need_fresh_go; then
-    log_info "Installing Golang ${GO_TARBALL_VERSION} from go.dev (distro package is too old or missing)..."
-    ARCH=$(uname -m)
-    case "$ARCH" in
-        x86_64) GOARCH="amd64" ;;
-        aarch64|arm64) GOARCH="arm64" ;;
-        *) log_err "Unsupported architecture: $ARCH"; exit 1 ;;
-    esac
-    OS_NAME=$(uname -s | tr '[:upper:]' '[:lower:]')
-    if curl -fsSL "https://go.dev/dl/go${GO_TARBALL_VERSION}.${OS_NAME}-${GOARCH}.tar.gz" -o /tmp/go.tar.gz; then
-        rm -rf /usr/local/go
-        tar -C /usr/local -xzf /tmp/go.tar.gz
-        rm -f /tmp/go.tar.gz
-    else
-        log_err "Failed to download Go tarball."
-    fi
-else
-    log_info "Golang is already installed and recent enough ($(go version))."
-fi
+$ok = @()
+$failed = @()
 
-export PATH=$PATH:/usr/local/go/bin
+foreach ($tool in $tools) {
+  $t = $tool.Name; $owner = $tool.Owner
+  $exePath = Join-Path $InstallDir "$t.exe"
+  if (Test-Path $exePath) {
+    Write-Host "[$t] already there" -ForegroundColor Yellow
+    $ok += $t
+    continue
+  }
+  try {
+    $tag = Get-LatestTag $owner $t
+    $ver = $tag.TrimStart("v")
+    $downloaded = $null
+    $usedName = $null
+    foreach ($ext in "zip", "tar.gz") {
+      $name = "$($t)_$($ver)_windows_amd64.$ext"
+      $file = Join-Path $Tmp $name
+      try {
+        Invoke-WebRequest "https://github.com/$owner/$t/releases/download/$tag/$name" -OutFile $file -ErrorAction Stop
+        $downloaded = $file; $usedName = $name; break
+      } catch { Write-Host "[$t] $name not found, trying next..." -ForegroundColor DarkGray }
+    }
+    if (-not $downloaded) { throw "no windows_amd64 asset found for $tag" }
 
-REAL_USER="${SUDO_USER:-$USER}"
-REAL_HOME=$(eval echo "~$REAL_USER")
-export GOPATH="$REAL_HOME/go"
-export PATH=$PATH:$GOPATH/bin
+    $dir = Join-Path $Tmp $t
+    Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force $dir | Out-Null
+    if ($downloaded.EndsWith(".zip")) { Expand-Archive $downloaded $dir -Force }
+    else { tar -xzf $downloaded -C $dir }
 
-if ! command -v go &>/dev/null; then
-    log_err "Go installation failed - aborting, Go-based tools cannot be installed."
-    exit 1
-fi
+    $exe = Get-ChildItem $dir -Recurse -Filter "$t.exe" | Select-Object -First 1
+    if (-not $exe) { throw "downloaded ($usedName) but $t.exe was not found inside the archive" }
 
-# 4. Persist PATH for the real (non-root) user, not just this shell
-for RC in "$REAL_HOME/.bashrc" "$REAL_HOME/.zshrc"; do
-    [ -f "$RC" ] || continue
-    grep -qF '/usr/local/go/bin' "$RC" 2>/dev/null || \
-        echo 'export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin' >> "$RC"
-done
+    Move-Item $exe.FullName $exePath -Force
 
-# 5. Install each Go-based tool and verify it actually landed, instead of
-#    hiding failures behind `cp ... 2>/dev/null`.
-install_go_tool() {
-    local name="$1" pkg="$2" logfile="/tmp/marsadix_${1}.log"
-    log_info "Installing $name..."
-    if sudo -u "$REAL_USER" env PATH="$PATH" GOPATH="$GOPATH" go install -v "$pkg@latest" &>"$logfile"; then
-        local bin="$GOPATH/bin/$name"
-        if [ -x "$bin" ]; then
-            cp -f "$bin" /usr/local/bin/ && { log_ok "$name installed."; return; }
-        fi
-    fi
-    FAILED+=("$name")
-    log_err "$name failed to install (see $logfile)."
+    # Verify the binary actually runs before declaring success, instead of
+    # trusting that "file exists" means "tool works".
+    $works = $false
+    foreach ($flag in "-version", "--version", "-h") {
+      try {
+        & $exePath $flag *>$null
+        $works = $true
+        break
+      } catch { }
+    }
+    if (-not $works) {
+      Write-Host "[$t] installed ($usedName) but could not be executed - verify manually" -ForegroundColor Yellow
+    } else {
+      Write-Host "[$t] installed and verified: $usedName" -ForegroundColor Green
+    }
+
+    $ok += $t
+    Remove-Item $downloaded, $dir -Recurse -Force -ErrorAction SilentlyContinue
+  } catch {
+    Write-Host "[$t] FAILED: $($_.Exception.Message)" -ForegroundColor Red
+    $failed += $t
+  }
 }
 
-install_go_tool subfinder   github.com/projectdiscovery/subfinder/v2/cmd/subfinder
-install_go_tool assetfinder github.com/tomnomnom/assetfinder
-install_go_tool chaos       github.com/projectdiscovery/chaos-client/cmd/chaos
-install_go_tool httpx       github.com/projectdiscovery/httpx/cmd/httpx
-install_go_tool dnsx        github.com/projectdiscovery/dnsx/cmd/dnsx
-install_go_tool naabu       github.com/projectdiscovery/naabu/v2/cmd/naabu
-install_go_tool nuclei      github.com/projectdiscovery/nuclei/v3/cmd/nuclei
-install_go_tool gau         github.com/lc/gau/v2/cmd/gau
-install_go_tool ffuf        github.com/ffuf/ffuf/v2
+# nmap: install it automatically via winget instead of only printing a hint
+if (-not (Get-Command nmap -ErrorAction SilentlyContinue)) {
+  if (Get-Command winget -ErrorAction SilentlyContinue) {
+    Write-Host "[nmap] not found, installing via winget..." -ForegroundColor Blue
+    try {
+      winget install -e --id Insecure.Nmap --accept-package-agreements --accept-source-agreements | Out-Null
+      Write-Host "[nmap] installed via winget." -ForegroundColor Green
+    } catch {
+      Write-Host "[nmap] winget install failed: $($_.Exception.Message)" -ForegroundColor Red
+      $failed += "nmap"
+    }
+  } else {
+    Write-Host "[nmap] winget not available - install manually: https://nmap.org/download.html" -ForegroundColor Yellow
+    $failed += "nmap"
+  }
+} else {
+  Write-Host "[nmap] already installed" -ForegroundColor Yellow
+}
 
-# 6. Amass via the system package manager
-log_info "Installing Amass..."
-if $PKG_INSTALL amass &>/tmp/marsadix_amass.log && command -v amass &>/dev/null; then
-    log_ok "amass installed."
-else
-    FAILED+=("amass")
-    log_err "amass failed via package manager (see /tmp/marsadix_amass.log)."
-    log_warn "Fallback: go install -v github.com/owasp-amass/amass/v4/...@master"
-fi
+# PATH is now added by default (opt out with -NoAddToPath), since tools
+# that download fine but never run from any shell defeat the point.
+if (-not $NoAddToPath) {
+  $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+  if (-not $userPath) { $userPath = "" }
+  if (($userPath -split ";") -notcontains $InstallDir) {
+    [Environment]::SetEnvironmentVariable("Path", ($userPath.TrimEnd(";") + ";" + $InstallDir), "User")
+    Write-Host "Added $InstallDir to your user PATH. Open a NEW terminal for it to take effect." -ForegroundColor Cyan
+  }
+}
 
-# 7. Findomain - pick the right binary for this architecture instead of
-#    always assuming amd64, and check the download actually succeeded.
-log_info "Installing Findomain..."
-if ! command -v findomain &>/dev/null; then
-    ARCH=$(uname -m)
-    case "$ARCH" in
-        x86_64) FD_ASSET="findomain-linux" ;;
-        aarch64|arm64) FD_ASSET="findomain-aarch64-linux" ;;
-        *) FD_ASSET="" ;;
-    esac
-    if [ -n "$FD_ASSET" ] && curl -fsSL -o /tmp/findomain \
-        "https://github.com/findomain/findomain/releases/latest/download/${FD_ASSET}"; then
-        chmod +x /tmp/findomain
-        mv /tmp/findomain /usr/local/bin/findomain
-        log_ok "findomain installed."
-    else
-        FAILED+=("findomain")
-        log_err "findomain download failed for architecture ($ARCH)."
-    fi
-else
-    log_info "findomain is already installed."
-fi
+Write-Host ""
+Write-Host "=== Installation report ===" -ForegroundColor Blue
+Get-ChildItem $InstallDir -Filter *.exe | Select-Object Name, Length | Format-Table
 
-# 8. Final report - verify every tool actually resolves on PATH,
-#    instead of unconditionally printing "installed successfully".
-echo ""
-echo -e "${BLUE}=== Installation report ===${RESET}"
-for t in subfinder assetfinder chaos httpx dnsx naabu nuclei gau ffuf amass findomain; do
-    if command -v "$t" &>/dev/null; then
-        echo -e "  ${GREEN}[OK]${RESET}   $t"
-    else
-        echo -e "  ${RED}[FAIL]${RESET} $t"
-    fi
-done
+if ($failed.Count -gt 0) {
+  Write-Host ("Failed: " + ($failed -join ", ")) -ForegroundColor Red
+} else {
+  Write-Host "All tools installed successfully!" -ForegroundColor Green
+}
 
-echo ""
-if [ "${#FAILED[@]}" -eq 0 ]; then
-    log_ok "All external tools installed successfully!"
-else
-    log_warn "Some tools failed: ${FAILED[*]}. Check the logs in /tmp/marsadix_*.log"
-fi
-
-log_info "Open a NEW terminal (or run: source ${REAL_HOME}/.bashrc) so PATH changes take effect."
+Write-Host "Note: assetfinder / chaos / amass / findomain aren't covered here (see header comment) - use WSL for full parity with install-tools.sh." -ForegroundColor DarkYellow
+Write-Host "Next: make sure $InstallDir is in PATH, then run:  marsadix doctor"
