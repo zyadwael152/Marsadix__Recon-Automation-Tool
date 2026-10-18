@@ -18,12 +18,12 @@ db.save_many(ctx.conn, "assets", [...]).
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Optional
 
 from .. import db
-from ..models import Scan, ScanStatus
-from .config import Config
+from ..models import Scan, ScanMode, ScanStatus
+from .config import SCAN_MODES, Config, ConfigError
 from .loader import load_callable
 from .scope import Scope, ScopeError, normalize_host
 
@@ -60,8 +60,21 @@ class StageResult:
 
 
 def run_scan(target: str, config: Config, scope: Optional[Scope] = None,
-             max_depth: Optional[int] = None, rate_limit: Optional[int] = None):
-    """Create a scan, run every available stage, store the outcome."""
+             max_depth: Optional[int] = None, rate_limit: Optional[int] = None,
+             mode: Optional[str] = None, allow_injection: Optional[bool] = None):
+    """
+    Create a scan, run every available stage, store the outcome.
+
+    `mode` (C15): "passive" | "standard" | "full". Defaults to config.scan_mode.
+    This is stored on the Scan record (ctx.scan.mode) and on ctx.config.scan_mode
+    for the duration of this run; stage authors (recon/web/asm) are expected to
+    check it before doing anything more intrusive than the mode allows -- the
+    pipeline itself does not know what each stage considers "active".
+
+    `allow_injection` (A5): explicit opt-in for injection-style checks (XSS,
+    SQLi, SSTI probes). None keeps config.allow_injection; True/False overrides
+    it for this run only, without touching config.toml.
+    """
     host = normalize_host(target)
     if not host:
         raise ScopeError(f"invalid target: {target!r}")
@@ -69,6 +82,13 @@ def run_scan(target: str, config: Config, scope: Optional[Scope] = None,
     decision = scope.check(host)
     if not decision:
         raise ScopeError(f"target '{host}' is not in scope ({decision.reason})")
+
+    resolved_mode = config.scan_mode if mode is None else mode
+    if resolved_mode not in SCAN_MODES:
+        raise ConfigError(f"mode must be one of {SCAN_MODES}, got {resolved_mode!r}")
+    run_config = config
+    if allow_injection is not None and allow_injection != config.allow_injection:
+        run_config = replace(config, allow_injection=allow_injection)
 
     conn = db.connect(config.db_path)
     db.init_db(conn)
@@ -80,11 +100,12 @@ def run_scan(target: str, config: Config, scope: Optional[Scope] = None,
         is_baseline=first,
         max_depth=config.max_depth if max_depth is None else max_depth,
         rate_limit=config.rate_limit if rate_limit is None else rate_limit,
+        mode=ScanMode(resolved_mode),
     )
     db.save_scan(conn, scan)
-    log.info("scan #%s started: %s (baseline=%s)", scan.id, host, first)
+    log.info("scan #%s started: %s (baseline=%s, mode=%s)", scan.id, host, first, resolved_mode)
 
-    ctx = Context(conn=conn, scan=scan, scope=scope, config=config)
+    ctx = Context(conn=conn, scan=scan, scope=scope, config=run_config)
     results = []
     for name, path in STAGES:
         fn = load_callable(path)
