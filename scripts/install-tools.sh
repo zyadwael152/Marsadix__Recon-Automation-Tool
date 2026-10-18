@@ -46,7 +46,7 @@ fi
 
 log_info "Updating system and installing base prerequisites..."
 $PKG_UPDATE
-$PKG_INSTALL curl wget git unzip python3 python3-venv python3-pip || log_warn "Some base packages may have failed to install"
+$PKG_INSTALL curl wget git unzip file python3 python3-venv python3-pip || log_warn "Some base packages may have failed to install"
 
 # 3. Go: make sure a recent-enough version is present.
 #    Distro packages (apt's golang-go) are often too old for modern `go install pkg@latest`.
@@ -138,24 +138,44 @@ else
     log_warn "Fallback: go install -v github.com/owasp-amass/amass/v4/...@master"
 fi
 
-# 7. Findomain - pick the right binary for this architecture instead of
-#    always assuming amd64, and check the download actually succeeded.
+# 7. Findomain - current releases ship a .zip archive (not a raw binary),
+#    so download it, verify it's actually a zip, then unzip - instead of
+#    moving the downloaded file straight into /usr/local/bin and trusting
+#    it blindly (a failed download silently returns an HTML/JSON error
+#    page, which `mv`-ing directly turns into a broken "ASCII text" binary).
 log_info "Installing Findomain..."
 if ! command -v findomain &>/dev/null; then
     ARCH=$(uname -m)
     case "$ARCH" in
-        x86_64) FD_ASSET="findomain-linux" ;;
-        aarch64|arm64) FD_ASSET="findomain-aarch64-linux" ;;
+        x86_64) FD_ASSET="findomain-linux.zip" ;;
+        aarch64|arm64) FD_ASSET="findomain-aarch64.zip" ;;
+        armv7l) FD_ASSET="findomain-armv7.zip" ;;
+        i386|i686) FD_ASSET="findomain-linux-i386.zip" ;;
         *) FD_ASSET="" ;;
     esac
-    if [ -n "$FD_ASSET" ] && curl -fsSL -o /tmp/findomain \
-        "https://github.com/findomain/findomain/releases/latest/download/${FD_ASSET}"; then
-        chmod +x /tmp/findomain
-        mv /tmp/findomain /usr/local/bin/findomain
+    FD_OK=0
+    if [ -n "$FD_ASSET" ] && curl -fsSL -o /tmp/findomain.zip \
+        "https://github.com/Findomain/Findomain/releases/latest/download/${FD_ASSET}"; then
+        if file /tmp/findomain.zip | grep -qi "Zip archive"; then
+            rm -rf /tmp/findomain_extract
+            mkdir -p /tmp/findomain_extract
+            if unzip -q /tmp/findomain.zip -d /tmp/findomain_extract && \
+               [ -x /tmp/findomain_extract/findomain -o -f /tmp/findomain_extract/findomain ]; then
+                chmod +x /tmp/findomain_extract/findomain
+                mv /tmp/findomain_extract/findomain /usr/local/bin/findomain
+                FD_OK=1
+            fi
+            rm -rf /tmp/findomain_extract
+        else
+            log_err "Downloaded findomain asset is not a zip - GitHub asset naming may have changed again."
+        fi
+        rm -f /tmp/findomain.zip
+    fi
+    if [ "$FD_OK" -eq 1 ]; then
         log_ok "findomain installed."
     else
         FAILED+=("findomain")
-        log_err "findomain download failed for architecture ($ARCH)."
+        log_err "findomain download/extract failed for architecture ($ARCH)."
     fi
 else
     log_info "findomain is already installed."
