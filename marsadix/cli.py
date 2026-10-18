@@ -14,6 +14,7 @@ When you write your module, expose EXACTLY this function and the command works:
 
   monitor  ->  marsadix/monitor/runner.py : run(conn, config, dry_run=False, since=None)
   diff     ->  marsadix/core/diff.py      : run_diff(conn, target, old_id=None, new_id=None)
+  snapshots ->  marsadix/core/diff.py     : run_snapshots(conn, target)
   report   ->  marsadix/reports/generate.py : generate_report(conn, target, fmt, out_dir, scan_id=None)
   graph    ->  marsadix/core/graph.py     : run_graph(conn, target, scan_id=None)
   scan     ->  stages, see core/pipeline.py
@@ -73,6 +74,9 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("target")
     d.add_argument("--old", type=int, metavar="SCAN_ID")
     d.add_argument("--new", type=int, metavar="SCAN_ID")
+
+    sn = sub.add_parser("snapshots", help="list every scan of a target as a timeline")
+    sn.add_argument("target")
 
     r = sub.add_parser("report", help="generate HTML / JSON report")
     r.add_argument("target")
@@ -145,6 +149,14 @@ def cmd_diff(a, cfg: Config) -> int:
                      target=target, old_id=a.old, new_id=a.new)
 
 
+def cmd_snapshots(a, cfg: Config) -> int:
+    target = normalize_host(a.target) or a.target
+    if load_callable("marsadix.core.diff:run_snapshots") is None:
+        return _optional("marsadix.core.diff:run_snapshots", "snapshots")
+    return _optional("marsadix.core.diff:run_snapshots", "snapshots",
+                     conn=_open_db(cfg), target=target)
+
+
 def cmd_report(a, cfg: Config) -> int:
     target = normalize_host(a.target) or a.target
     if load_callable("marsadix.reports.generate:generate_report") is None:
@@ -191,8 +203,8 @@ def cmd_scope(a, cfg: Config) -> int:
 
 
 COMMANDS = {"scan": cmd_scan, "monitor": cmd_monitor, "diff": cmd_diff,
-            "report": cmd_report, "graph": cmd_graph, "doctor": cmd_doctor,
-            "scope": cmd_scope}
+            "snapshots": cmd_snapshots, "report": cmd_report, "graph": cmd_graph,
+            "doctor": cmd_doctor, "scope": cmd_scope}
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
