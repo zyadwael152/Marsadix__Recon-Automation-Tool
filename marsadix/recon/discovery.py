@@ -2,9 +2,10 @@ import asyncio
 import json
 import logging
 import urllib.request
+from functools import partial
 from typing import Set, List, Dict, Tuple
+from .api_sources import HTTP_TIMEOUT, fetch_virustotal, fetch_alienvault
 from .merger import merge_and_track
-from .api_sources import fetch_virustotal, fetch_alienvault
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,8 @@ async def fetch_crtsh(domain: str) -> Tuple[str, Set[str]]:
     try:
         loop = asyncio.get_event_loop()
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        response = await loop.run_in_executor(None, urllib.request.urlopen, req)
+        response = await loop.run_in_executor(
+            None, partial(urllib.request.urlopen, req, timeout=HTTP_TIMEOUT))
         
         if response.status == 200:
             data = json.loads(response.read().decode())
