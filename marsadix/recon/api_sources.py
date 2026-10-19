@@ -2,9 +2,19 @@ import asyncio
 import json
 import logging
 import urllib.request
+from functools import partial
 from typing import Set, Tuple
 
 logger = logging.getLogger(__name__)
+
+# Default socket timeout for urllib is None (block forever). On a network
+# that silently drops packets instead of refusing the connection, that
+# means these calls -- and anything awaiting them, including every test
+# that runs a scan -- can hang indefinitely. Every urlopen() call in this
+# module MUST pass an explicit timeout; this constant is the one place to
+# tune it.
+HTTP_TIMEOUT = 15  # seconds
+
 
 async def fetch_virustotal(domain: str, api_key: str = None) -> Tuple[str, Set[str]]:
     """Query VirusTotal and skip if API key is missing"""
@@ -18,7 +28,8 @@ async def fetch_virustotal(domain: str, api_key: str = None) -> Tuple[str, Set[s
     try:
         loop = asyncio.get_event_loop()
         req = urllib.request.Request(url, headers={'x-apikey': api_key})
-        response = await loop.run_in_executor(None, urllib.request.urlopen, req)
+        response = await loop.run_in_executor(
+            None, partial(urllib.request.urlopen, req, timeout=HTTP_TIMEOUT))
         
         if response.status == 200:
             data = json.loads(response.read().decode())
@@ -40,7 +51,8 @@ async def fetch_alienvault(domain: str) -> Tuple[str, Set[str]]:
     try:
         loop = asyncio.get_event_loop()
         req = urllib.request.Request(url)
-        response = await loop.run_in_executor(None, urllib.request.urlopen, req)
+        response = await loop.run_in_executor(
+            None, partial(urllib.request.urlopen, req, timeout=HTTP_TIMEOUT))
         
         if response.status == 200:
             data = json.loads(response.read().decode())
