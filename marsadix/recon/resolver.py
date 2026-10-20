@@ -5,11 +5,22 @@ from typing import Dict, List
 
 logger = logging.getLogger(__name__)
 
+# socket.gethostbyname() has NO built-in timeout and does not reliably
+# respect socket.setdefaulttimeout() on every platform. On a slow or
+# unresponsive DNS server it can block for a long time per call -- and this
+# runs once per discovered subdomain, so with dozens/hundreds of candidates
+# the wait adds up even though no single call is "stuck forever". Bounding
+# each lookup with asyncio.wait_for() caps the total time for this stage.
+DNS_TIMEOUT = 5  # seconds per subdomain
+
+
 async def resolve_domain(domain: str) -> bool:
     """Check if a domain resolves to an active IP address"""
     loop = asyncio.get_event_loop()
     try:
-        await loop.run_in_executor(None, socket.gethostbyname, domain)
+        await asyncio.wait_for(
+            loop.run_in_executor(None, socket.gethostbyname, domain),
+            timeout=DNS_TIMEOUT)
         return True
     except Exception:
         return False
