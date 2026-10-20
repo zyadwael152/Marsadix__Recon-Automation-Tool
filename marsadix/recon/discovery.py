@@ -79,6 +79,7 @@ async def _async_discover(domain: str, api_keys: dict = None) -> Dict[str, List[
         
     vt_key = api_keys.get("virustotal")
     chaos_key = api_keys.get("chaos")
+    otx_key = api_keys.get("alienvault")
     
     tasks = [
         run_cli_tool("subfinder", ["subfinder", "-d", domain, "-silent"]),
@@ -87,7 +88,7 @@ async def _async_discover(domain: str, api_keys: dict = None) -> Dict[str, List[
         run_cli_tool("findomain", ["findomain", "-t", domain, "-q"]),
         run_chaos(domain, chaos_key),
         fetch_crtsh(domain),
-        fetch_alienvault(domain),
+        fetch_alienvault(domain, otx_key),
         fetch_virustotal(domain, vt_key)
     ]
     results = await asyncio.gather(*tasks)
