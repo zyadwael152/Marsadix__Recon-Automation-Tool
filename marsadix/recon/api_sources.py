@@ -43,14 +43,20 @@ async def fetch_virustotal(domain: str, api_key: str = None) -> Tuple[str, Set[s
         
     return "virustotal", subdomains
 
-async def fetch_alienvault(domain: str) -> Tuple[str, Set[str]]:
-    """Query AlienVault OTX (Passive DNS)"""
+async def fetch_alienvault(domain: str, api_key: str = None) -> Tuple[str, Set[str]]:
+    """
+    Query AlienVault OTX (Passive DNS). Works without a key (anonymous
+    tier), but anonymous requests hit AlienVault's shared rate limit fast
+    (HTTP 429). Passing a free OTX account's key via the X-OTX-API-KEY
+    header uses that account's own, much higher, limit instead.
+    """
     subdomains = set()
     url = f"https://otx.alienvault.com/api/v1/indicators/domain/{domain}/passive_dns"
     logger.info("[*] Querying AlienVault...")
     try:
         loop = asyncio.get_event_loop()
-        req = urllib.request.Request(url)
+        headers = {'X-OTX-API-KEY': api_key} if api_key else {}
+        req = urllib.request.Request(url, headers=headers)
         response = await loop.run_in_executor(
             None, partial(urllib.request.urlopen, req, timeout=HTTP_TIMEOUT))
         
