@@ -54,6 +54,10 @@ KNOWN_TOOLS = {
     "gau": "archived URLs",
     "nuclei": "template scanning (ASM)",
     "ffuf": "fuzzing (optional)",
+    "amass": "active/passive subdomain enumeration",
+    "assetfinder": "subdomain discovery via API sources",
+    "chaos": "subdomain discovery via ProjectDiscovery Chaos dataset",
+    "findomain": "fast subdomain discovery (Rust)",
 }
 
 
