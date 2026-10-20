@@ -64,13 +64,13 @@ def run(ctx, *args, **kwargs) -> dict:
     
     if live_urls:
         live_file = os.path.join(output_dir, f"{target_name}_live_urls.txt")
-        with open(live_file, "w") as f:
+        with open(live_file, "w", encoding="utf-8") as f:
             f.write("\n".join(live_urls) + "\n")
         logger.info(f"[+] Saved {len(live_urls)} live URLs to {live_file}")
         
     if endpoints:
         end_file = os.path.join(output_dir, f"{target_name}_endpoints.txt")
-        with open(end_file, "w") as f:
+        with open(end_file, "w", encoding="utf-8") as f:
             f.write("\n".join(endpoints) + "\n")
         logger.info(f"[+] Saved {len(endpoints)} endpoints to {end_file}")
     
