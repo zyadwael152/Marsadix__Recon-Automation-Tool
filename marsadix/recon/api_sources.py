@@ -23,7 +23,7 @@ async def fetch_virustotal(domain: str, api_key: str = None) -> Tuple[str, Set[s
         logger.warning("[-] Skipped VirusTotal (No API Key provided).")
         return "virustotal", subdomains
         
-    url = f"https://www.virustotal.com/api/v3/domains/{domain}/subdomains?limit=100"
+    url = f"https://www.virustotal.com/api/v3/domains/{domain}/subdomains?limit=40"
     logger.info("[*] Querying VirusTotal...")
     try:
         loop = asyncio.get_event_loop()
