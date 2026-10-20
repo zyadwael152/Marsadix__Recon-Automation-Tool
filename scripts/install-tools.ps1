@@ -10,12 +10,10 @@
 
   naabu may ask for Npcap on Windows (https://npcap.com).
 
-  NOTE: assetfinder / chaos / amass / findomain are installed by the Linux/macOS
-  script (install-tools.sh) but NOT by this script, because their release asset
-  names don't follow the same "<tool>_<ver>_windows_amd64.zip" pattern used by
-  the tools below, and guessing wrong filenames would silently ship a broken
-  installer. For full tool parity on Windows, either run the project under WSL,
-  or install Go for Windows and run `go install <pkg>@latest` for those four.
+  assetfinder / amass / chaos are Go tools installed via `go install`
+  (needs Go: winget install GoLang.Go) instead of guessing a release
+  filename. findomain is Rust, not Go, so it's downloaded directly from
+  its GitHub release instead.
 #>
 param(
   [string]$InstallDir = (Join-Path $env:USERPROFILE "marsadix-tools\bin"),
@@ -113,6 +111,80 @@ foreach ($tool in $tools) {
   }
 }
 
+# --- assetfinder, amass, chaos: Go tools, installed with `go install` so we
+#     never have to guess a release-asset filename for them. Needs Go.
+$goTools = @(
+  @{ Name = "assetfinder"; Module = "github.com/tomnomnom/assetfinder@latest" },
+  @{ Name = "amass";       Module = "github.com/owasp-amass/amass/v4/...@master" },
+  @{ Name = "chaos";       Module = "github.com/projectdiscovery/chaos-client/cmd/chaos@latest" }
+)
+
+$goAvailable = [bool](Get-Command go -ErrorAction SilentlyContinue)
+if (-not $goAvailable) {
+  Write-Host "[go] not found - assetfinder/amass/chaos need it: winget install GoLang.Go" -ForegroundColor Yellow
+}
+
+foreach ($gt in $goTools) {
+  $t = $gt.Name
+  $exePath = Join-Path $InstallDir "$t.exe"
+  if (Test-Path $exePath) {
+    Write-Host "[$t] already there" -ForegroundColor Yellow
+    $ok += $t
+    continue
+  }
+  if (-not $goAvailable) {
+    Write-Host "[$t] SKIPPED: go is not installed" -ForegroundColor Yellow
+    $failed += $t
+    continue
+  }
+  try {
+    $prevGobin = $env:GOBIN
+    $env:GOBIN = $InstallDir
+    $goOutput = & go install $gt.Module 2>&1
+    $env:GOBIN = $prevGobin
+    if (Test-Path $exePath) {
+      Write-Host "[$t] installed via go install" -ForegroundColor Green
+      $ok += $t
+    } else {
+      throw "go install finished but $t.exe was not produced. go output: $goOutput"
+    }
+  } catch {
+    Write-Host "[$t] FAILED: $($_.Exception.Message)" -ForegroundColor Red
+    $failed += $t
+  }
+}
+
+# --- findomain: not a Go tool (it's Rust), so it can't use `go install`.
+#     Downloaded directly like the main tools above, but its release asset
+#     is named "findomain-windows.zip" (no version/arch in the filename) --
+#     this naming is our best-effort read of their release page; if GitHub
+#     changed it, this block fails cleanly and tells you to grab it by hand.
+$findomainExe = Join-Path $InstallDir "findomain.exe"
+if (Test-Path $findomainExe) {
+  Write-Host "[findomain] already there" -ForegroundColor Yellow
+  $ok += "findomain"
+} else {
+  try {
+    $tag = Get-LatestTag "Findomain" "findomain"
+    $file = Join-Path $Tmp "findomain-windows.zip"
+    Invoke-WebRequest "https://github.com/Findomain/findomain/releases/download/$tag/findomain-windows.zip" -OutFile $file -ErrorAction Stop
+    $dir = Join-Path $Tmp "findomain"
+    Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force $dir | Out-Null
+    Expand-Archive $file $dir -Force
+    $exe = Get-ChildItem $dir -Recurse -Filter "findomain.exe" | Select-Object -First 1
+    if (-not $exe) { throw "findomain.exe not found inside the downloaded archive" }
+    Move-Item $exe.FullName $findomainExe -Force
+    Write-Host "[findomain] installed: $tag" -ForegroundColor Green
+    $ok += "findomain"
+    Remove-Item $file, $dir -Recurse -Force -ErrorAction SilentlyContinue
+  } catch {
+    Write-Host "[findomain] FAILED: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "  -> download manually from https://github.com/Findomain/findomain/releases" -ForegroundColor Red
+    $failed += "findomain"
+  }
+}
+
 # nmap: install it automatically via winget instead of only printing a hint
 if (-not (Get-Command nmap -ErrorAction SilentlyContinue)) {
   if (Get-Command winget -ErrorAction SilentlyContinue) {
@@ -153,5 +225,4 @@ if ($failed.Count -gt 0) {
   Write-Host "All tools installed successfully!" -ForegroundColor Green
 }
 
-Write-Host "Note: assetfinder / chaos / amass / findomain aren't covered here (see header comment) - use WSL for full parity with install-tools.sh." -ForegroundColor DarkYellow
 Write-Host "Next: make sure $InstallDir is in PATH, then run:  marsadix doctor"
