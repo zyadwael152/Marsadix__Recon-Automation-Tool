@@ -48,11 +48,13 @@ def run(ctx, *args, **kwargs) -> dict:
         in_scope = getattr(ctx, "in_scope", None)
 
         assets = []
-        for host, sources in active_results.items():
+        for host, info in active_results.items():
+            sources = info["sources"]
             host_in_scope = in_scope(host) if callable(in_scope) else True
             assets.append(Asset(
                 scan_id=scan_id,
                 host=host,
+                ip=info.get("ip"),
                 in_scope=host_in_scope,
                 source=DiscoverySource.PASSIVE,
                 confidence_score=min(100, len(sources) * 20),
@@ -61,9 +63,9 @@ def run(ctx, *args, **kwargs) -> dict:
         saved = db.save_many(ctx.conn, "assets", assets)
         logger.info(f"[+] Saved {saved} assets for scan #{scan_id}")
 
-        for host, sources in active_results.items():
-            db.save_asset_sources_many(ctx.conn, scan_id, host, sources)
+        for host, info in active_results.items():
+            db.save_asset_sources_many(ctx.conn, scan_id, host, info["sources"])
 
     return {
-        "subdomains": active_results
+        "subdomains": {host: info["sources"] for host, info in active_results.items()}
     }
