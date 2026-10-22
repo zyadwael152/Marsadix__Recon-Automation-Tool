@@ -148,22 +148,37 @@ def _write_json(data: dict, out_dir: Path, target: str, scan_id: int) -> Path:
 # see is exactly what Python computed, nothing executes in the browser.
 # --------------------------------------------------------------------------
 
-_NODE_COLORS = {
-    "subdomain": "#2457d9", "ip": "#5b6472", "asn": "#8a6d00",
-    "cdn": "#6a4fb3", "port": "#5b6472", "service": "#2f7a3d",
-    "cpe": "#9aa4b2", "technology": "#0e7490", "cve": "#b3261e",
-    "finding": "#c75b12", "email": "#5b6472", "js_file": "#8a6d00",
-    "endpoint": "#2f7a3d", "certificate": "#6a4fb3", "org": "#2457d9",
+# Each node type maps to a CSS custom property (defined in _CSS, with its
+# own light/dark value) instead of a hardcoded hex -- so the graph itself
+# switches palette with the rest of the report instead of staying a fixed
+# light-mode color scheme inside a dark page.
+_NODE_VARS = {
+    "subdomain": "--n-subdomain", "ip": "--n-ip", "asn": "--n-asn",
+    "cdn": "--n-cdn", "port": "--n-port", "service": "--n-service",
+    "cpe": "--n-cpe", "technology": "--n-tech", "cve": "--n-cve",
+    "finding": "--n-finding", "email": "--n-ip", "js_file": "--n-asn",
+    "endpoint": "--n-service", "certificate": "--n-cdn", "org": "--n-subdomain",
+}
+
+# Edges are colour-coded by what KIND of relationship they tell: a plain
+# infrastructure link reads differently from "this is what's vulnerable".
+_EDGE_GROUP = {
+    "resolves_to": "struct", "belongs_to": "struct", "behind": "struct",
+    "exposes": "struct", "runs": "struct", "has_cpe": "struct", "uses": "struct",
+    "affected_by": "risk", "listed_in": "risk", "found_on": "risk",
 }
 
 
 def _layout_graph(nodes: list[dict], edges: list[dict],
-                   width: int = 900, height: int = 560, iterations: int = 200) -> dict:
+                   width: int = 960, height: int = 620, iterations: int = 400) -> dict:
     """
     Force-directed layout (Fruchterman-Reingold style), pure Python, no
     dependency. Nodes repel each other; edges act like springs pulling
     connected nodes together. Deterministic (seeded) so re-generating the
-    report for the same scan draws the same picture.
+    report for the same scan draws the same picture. More iterations than a
+    naive implementation (400) so graphs with 0 or few edges -- where only
+    repulsion is doing any work -- still settle into an even spread instead
+    of a cramped, half-converged cluster.
     """
     if not nodes:
         return {}
@@ -174,7 +189,7 @@ def _layout_graph(nodes: list[dict], edges: list[dict],
 
     safe_edges = [e for e in edges if e["src_id"] in valid_ids and e["dst_id"] in valid_ids]
 
-    for _ in range(iterations):
+    for it in range(iterations):
         disp = {nid: [0.0, 0.0] for nid in pos}
         ids = list(pos.keys())
         for i in range(len(ids)):
@@ -194,12 +209,14 @@ def _layout_graph(nodes: list[dict], edges: list[dict],
             ux, uy = dx / dist, dy / dist
             disp[a][0] -= ux * force; disp[a][1] -= uy * force
             disp[b][0] += ux * force; disp[b][1] += uy * force
+        # cooling: large steps early to spread out fast, tiny steps late to settle
+        temp = max(1.0, 14 * (1 - it / iterations))
         for nid in pos:
             dx, dy = disp[nid]
             dist = math.hypot(dx, dy) or 0.01
-            cap = min(dist, 10)
-            pos[nid][0] = min(width - 30, max(30, pos[nid][0] + (dx / dist) * cap))
-            pos[nid][1] = min(height - 30, max(30, pos[nid][1] + (dy / dist) * cap))
+            cap = min(dist, temp)
+            pos[nid][0] = min(width - 40, max(40, pos[nid][0] + (dx / dist) * cap))
+            pos[nid][1] = min(height - 40, max(40, pos[nid][1] + (dy / dist) * cap))
     return pos
 
 
@@ -208,8 +225,15 @@ def _render_graph_svg(graph: dict) -> str:
     if not nodes:
         return '<p class="muted">No graph data for this scan (recon/web/asm haven\'t run yet).</p>'
 
-    width, height = 900, 560
+    width, height = 960, 620
     pos = _layout_graph(nodes, edges, width, height)
+
+    degree: dict[str, int] = {n["id"]: 0 for n in nodes}
+    for e in edges:
+        if e["src_id"] in degree:
+            degree[e["src_id"]] += 1
+        if e["dst_id"] in degree:
+            degree[e["dst_id"]] += 1
 
     lines = []
     for e in edges:
@@ -217,30 +241,53 @@ def _render_graph_svg(graph: dict) -> str:
             continue
         x1, y1 = pos[e["src_id"]]
         x2, y2 = pos[e["dst_id"]]
+        group = _EDGE_GROUP.get(e["relation"], "struct")
         lines.append(
-            f'<line x1="{x1:.0f}" y1="{y1:.0f}" x2="{x2:.0f}" y2="{y2:.0f}" class="graph-edge">'
-            f'<title>{_e(e["relation"])}</title></line>')
+            f'<line x1="{x1:.0f}" y1="{y1:.0f}" x2="{x2:.0f}" y2="{y2:.0f}" '
+            f'class="graph-edge edge-{group}"><title>{_e(e["relation"])}</title></line>')
+
+    # Important nodes get a visible label; a sea of 50 isolated subdomains
+    # with no relationships doesn't need 50 overlapping text labels to be
+    # readable -- hovering any dot still shows its name via <title>.
+    always_label = {"cve", "finding", "asn", "cdn"}
+    show_label_for = {
+        n["id"] for n in nodes
+        if degree[n["id"]] > 0 or n["node_type"] in always_label or len(nodes) <= 15
+    }
 
     circles = []
     for n in nodes:
         if n["id"] not in pos:
             continue
         x, y = pos[n["id"]]
-        color = _NODE_COLORS.get(n["node_type"], "#5b6472")
-        label = n["label"][:22] + ("…" if len(n["label"]) > 22 else "")
+        var = _NODE_VARS.get(n["node_type"], "--n-ip")
+        r = 6 + min(degree[n["id"]], 8) * 1.4   # busier nodes draw the eye first
+        label_svg = ""
+        if n["id"] in show_label_for:
+            label = n["label"][:24] + ("…" if len(n["label"]) > 24 else "")
+            label_svg = f'<text x="{r + 4:.0f}" y="4" class="graph-label">{_e(label)}</text>'
         circles.append(f'''
         <g class="graph-node" transform="translate({x:.0f},{y:.0f})">
-          <circle r="7" fill="{color}"><title>{_e(n["node_type"])}: {_e(n["label"])}</title></circle>
-          <text x="10" y="4" class="graph-label">{_e(label)}</text>
+          <circle r="{r:.0f}" fill="var({var})" class="node-dot">
+            <title>{_e(n["node_type"])}: {_e(n["label"])} ({degree[n["id"]]} link{"s" if degree[n["id"]] != 1 else ""})</title>
+          </circle>
+          {label_svg}
         </g>''')
 
     legend = "".join(
-        f'<span class="legend-item"><i style="background:{_NODE_COLORS.get(t, "#5b6472")}"></i>{_e(t)}</span>'
+        f'<span class="legend-item"><i style="background:var({_NODE_VARS.get(t, "--n-ip")})"></i>{_e(t)}</span>'
         for t in sorted({n["node_type"] for n in nodes}))
 
     return f'''
     <div class="legend">{legend}</div>
     <svg viewBox="0 0 {width} {height}" class="graph-svg">
+      <defs>
+        <radialGradient id="graphBg" cx="50%" cy="35%" r="75%">
+          <stop offset="0%" stop-color="var(--graph-bg-near)"/>
+          <stop offset="100%" stop-color="var(--graph-bg-far)"/>
+        </radialGradient>
+      </defs>
+      <rect x="0" y="0" width="{width}" height="{height}" fill="url(#graphBg)" rx="10"/>
       {"".join(lines)}
       {"".join(circles)}
     </svg>'''
@@ -334,14 +381,27 @@ _CSS = """
   --bg:#f7f8fa; --surface:#ffffff; --text:#1b1f24; --muted:#5b6472;
   --border:#e2e5ea; --accent:#2457d9;
   --crit:#b3261e; --high:#c75b12; --med:#a67c00; --low:#2f7a3d; --info:#5b6472;
+  /* Knowledge Graph palette (light) */
+  --n-subdomain:#2457d9; --n-ip:#5b6472; --n-asn:#a6790a; --n-cdn:#7c5cd1;
+  --n-service:#2f7a3d; --n-cpe:#8a93a3; --n-tech:#0e7490; --n-cve:#c23a32;
+  --n-finding:#d9731a; --n-port:#5b6472;
+  --graph-bg-near:#eef1f8; --graph-bg-far:#f7f8fa;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg:#13161b; --surface:#1b1f26; --text:#e8eaed; --muted:#9aa4b2; --border:#2b313b;
+    --n-subdomain:#6d93ff; --n-ip:#9aa4b2; --n-asn:#e3b341; --n-cdn:#b794f6;
+    --n-service:#5fd97a; --n-cpe:#9aa4b2; --n-tech:#4dd0e1; --n-cve:#ff6b61;
+    --n-finding:#ffa552; --n-port:#9aa4b2;
+    --graph-bg-near:#242a35; --graph-bg-far:#161a21;
   }
 }
 :root[data-theme="dark"] {
   --bg:#13161b; --surface:#1b1f26; --text:#e8eaed; --muted:#9aa4b2; --border:#2b313b;
+  --n-subdomain:#6d93ff; --n-ip:#9aa4b2; --n-asn:#e3b341; --n-cdn:#b794f6;
+  --n-service:#5fd97a; --n-cpe:#9aa4b2; --n-tech:#4dd0e1; --n-cve:#ff6b61;
+  --n-finding:#ffa552; --n-port:#9aa4b2;
+  --graph-bg-near:#242a35; --graph-bg-far:#161a21;
 }
 * { box-sizing: border-box; }
 body { margin:0; background:var(--bg); color:var(--text);
@@ -381,17 +441,26 @@ body.engagement .engagement-only { display:table-cell; }
 .muted { color:var(--muted); }
 .limitations { background:var(--surface); border:1px solid var(--border);
                border-left:4px solid var(--med); border-radius:10px; padding:16px; }
-.graph-svg { width:100%; height:auto; background:var(--surface);
-             border:1px solid var(--border); border-radius:10px; }
-.graph-edge { stroke:var(--border); stroke-width:1.2; }
-.graph-node circle { stroke:var(--surface); stroke-width:1.5; cursor:default; }
-.graph-label { font-size:9px; fill:var(--muted); pointer-events:none; }
+.graph-svg { width:100%; height:auto; border:1px solid var(--border); border-radius:10px; }
+.graph-edge { stroke:var(--border); stroke-width:1.1; opacity:.8; }
+.graph-edge.edge-risk { stroke:var(--crit); stroke-width:1.4; opacity:.55; }
+.graph-node .node-dot { stroke:var(--surface); stroke-width:2; cursor:default;
+                         transition:r .15s ease; }
+.graph-node:hover .node-dot { stroke:var(--accent); }
+.graph-label { font-size:9.5px; font-weight:600; fill:var(--text); pointer-events:none;
+               paint-order:stroke; stroke:var(--surface); stroke-width:3px; }
 .legend { display:flex; flex-wrap:wrap; gap:12px; margin-bottom:10px; font-size:12px; color:var(--muted); }
 .legend-item { display:flex; align-items:center; gap:5px; }
 .legend-item i { width:9px; height:9px; border-radius:50%; display:inline-block; }
 """
 
 _JS = """
+function toggleTheme() {
+  const root = document.documentElement;
+  const dark = root.getAttribute('data-theme') === 'dark';
+  root.setAttribute('data-theme', dark ? 'light' : 'dark');
+  document.getElementById('btn-theme').textContent = dark ? 'Dark mode' : 'Light mode';
+}
 function setView(mode) {
   document.body.classList.toggle('engagement', mode === 'engagement');
   document.getElementById('btn-triage').classList.toggle('active', mode === 'triage');
@@ -441,6 +510,7 @@ def _render_html(data: dict) -> str:
     <button id="btn-triage" class="active" onclick="setView('triage')">Triage view</button>
     <button id="btn-engagement" onclick="setView('engagement')">Engagement view</button>
     <button onclick="exportCSV()">Export findings (CSV)</button>
+    <button id="btn-theme" onclick="toggleTheme()">Dark mode</button>
   </div>
 
   <section>
