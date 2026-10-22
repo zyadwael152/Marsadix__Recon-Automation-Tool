@@ -1,7 +1,7 @@
 import asyncio
 import socket
 import logging
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -14,32 +14,39 @@ logger = logging.getLogger(__name__)
 DNS_TIMEOUT = 5  # seconds per subdomain
 
 
-async def resolve_domain(domain: str) -> bool:
-    """Check if a domain resolves to an active IP address"""
+async def resolve_domain(domain: str) -> Optional[str]:
+    """Resolve a domain to its IP address. Returns None if it doesn't resolve."""
     loop = asyncio.get_event_loop()
     try:
-        await asyncio.wait_for(
+        return await asyncio.wait_for(
             loop.run_in_executor(None, socket.gethostbyname, domain),
             timeout=DNS_TIMEOUT)
-        return True
     except Exception:
-        return False
+        return None
 
-async def filter_active_subdomains(subdomains_dict: Dict[str, List[str]]) -> Dict[str, List[str]]:
-    """Filter out dead subdomains and keep only active ones"""
+
+async def filter_active_subdomains(subdomains_dict: Dict[str, List[str]]) -> Dict[str, dict]:
+    """
+    Filter out dead subdomains and attach the resolved IP to each survivor.
+
+    Returns {host: {"sources": [...], "ip": "1.2.3.4"}}. The IP is what lets
+    the Knowledge Graph (core/graph.py) draw "resolves_to" edges between
+    subdomains and the IPs they share -- without it, every subdomain is an
+    isolated node with no relationships to show.
+    """
     logger.info(f"[*] Starting DNS resolution for {len(subdomains_dict)} subdomains...")
-    
+
     active_subdomains = {}
-    
+
     tasks = {
         domain: asyncio.create_task(resolve_domain(domain))
         for domain in subdomains_dict.keys()
     }
-    
+
     for domain, task in tasks.items():
-        is_active = await task
-        if is_active:
-            active_subdomains[domain] = subdomains_dict[domain]
-            
+        ip = await task
+        if ip:
+            active_subdomains[domain] = {"sources": subdomains_dict[domain], "ip": ip}
+
     logger.info(f"[+] DNS resolution complete. Active subdomains: {len(active_subdomains)} / {len(subdomains_dict)}")
     return active_subdomains
