@@ -40,6 +40,8 @@ from __future__ import annotations
 import html
 import json
 import logging
+import math
+import random
 import sys
 from pathlib import Path
 from typing import Optional
@@ -115,6 +117,9 @@ def _gather(conn, target: str, scan_id: Optional[int]) -> Optional[dict]:
         "findings": findings,
         "owasp_coverage": db.get_owasp_coverage(conn, scan_id),
         "source_coverage": db.get_source_coverage(conn, scan_id),
+        "graph": db.get_graph(conn, scan_id),  # written by the "graph" pipeline
+                                                 # stage (core/graph.py); this
+                                                 # module only reads it (G5)
         "posture_score": _preliminary_posture_score(findings),
         "previous_scan_id": prev["id"] if prev else None,
         "diff": diff.to_dict() if diff else None,
@@ -130,6 +135,115 @@ def _write_json(data: dict, out_dir: Path, target: str, scan_id: int) -> Path:
     path = out_dir / f"{target}_scan{scan_id}_report.json"
     path.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
     return path
+
+
+# --------------------------------------------------------------------------
+# Knowledge Graph visualization (G5)
+#
+# Deliberately NOT using a JS library (Cytoscape.js/D3.js): the layout is
+# computed once, in Python, at report-generation time, and emitted as plain
+# static SVG. This keeps the report a single offline-viewable file with zero
+# external script tags, consistent with the rest of this module, and means
+# there is no client-side physics/rendering code to get wrong -- what you
+# see is exactly what Python computed, nothing executes in the browser.
+# --------------------------------------------------------------------------
+
+_NODE_COLORS = {
+    "subdomain": "#2457d9", "ip": "#5b6472", "asn": "#8a6d00",
+    "cdn": "#6a4fb3", "port": "#5b6472", "service": "#2f7a3d",
+    "cpe": "#9aa4b2", "technology": "#0e7490", "cve": "#b3261e",
+    "finding": "#c75b12", "email": "#5b6472", "js_file": "#8a6d00",
+    "endpoint": "#2f7a3d", "certificate": "#6a4fb3", "org": "#2457d9",
+}
+
+
+def _layout_graph(nodes: list[dict], edges: list[dict],
+                   width: int = 900, height: int = 560, iterations: int = 200) -> dict:
+    """
+    Force-directed layout (Fruchterman-Reingold style), pure Python, no
+    dependency. Nodes repel each other; edges act like springs pulling
+    connected nodes together. Deterministic (seeded) so re-generating the
+    report for the same scan draws the same picture.
+    """
+    if not nodes:
+        return {}
+    rng = random.Random(42)
+    pos = {n["id"]: [rng.uniform(0, width), rng.uniform(0, height)] for n in nodes}
+    valid_ids = set(pos)
+    k = math.sqrt((width * height) / max(len(nodes), 1))
+
+    safe_edges = [e for e in edges if e["src_id"] in valid_ids and e["dst_id"] in valid_ids]
+
+    for _ in range(iterations):
+        disp = {nid: [0.0, 0.0] for nid in pos}
+        ids = list(pos.keys())
+        for i in range(len(ids)):
+            for j in range(i + 1, len(ids)):
+                a, b = ids[i], ids[j]
+                dx, dy = pos[a][0] - pos[b][0], pos[a][1] - pos[b][1]
+                dist = math.hypot(dx, dy) or 0.01
+                force = (k * k) / dist
+                ux, uy = dx / dist, dy / dist
+                disp[a][0] += ux * force; disp[a][1] += uy * force
+                disp[b][0] -= ux * force; disp[b][1] -= uy * force
+        for e in safe_edges:
+            a, b = e["src_id"], e["dst_id"]
+            dx, dy = pos[a][0] - pos[b][0], pos[a][1] - pos[b][1]
+            dist = math.hypot(dx, dy) or 0.01
+            force = (dist * dist) / k
+            ux, uy = dx / dist, dy / dist
+            disp[a][0] -= ux * force; disp[a][1] -= uy * force
+            disp[b][0] += ux * force; disp[b][1] += uy * force
+        for nid in pos:
+            dx, dy = disp[nid]
+            dist = math.hypot(dx, dy) or 0.01
+            cap = min(dist, 10)
+            pos[nid][0] = min(width - 30, max(30, pos[nid][0] + (dx / dist) * cap))
+            pos[nid][1] = min(height - 30, max(30, pos[nid][1] + (dy / dist) * cap))
+    return pos
+
+
+def _render_graph_svg(graph: dict) -> str:
+    nodes, edges = graph.get("nodes", []), graph.get("edges", [])
+    if not nodes:
+        return '<p class="muted">No graph data for this scan (recon/web/asm haven\'t run yet).</p>'
+
+    width, height = 900, 560
+    pos = _layout_graph(nodes, edges, width, height)
+
+    lines = []
+    for e in edges:
+        if e["src_id"] not in pos or e["dst_id"] not in pos:
+            continue
+        x1, y1 = pos[e["src_id"]]
+        x2, y2 = pos[e["dst_id"]]
+        lines.append(
+            f'<line x1="{x1:.0f}" y1="{y1:.0f}" x2="{x2:.0f}" y2="{y2:.0f}" class="graph-edge">'
+            f'<title>{_e(e["relation"])}</title></line>')
+
+    circles = []
+    for n in nodes:
+        if n["id"] not in pos:
+            continue
+        x, y = pos[n["id"]]
+        color = _NODE_COLORS.get(n["node_type"], "#5b6472")
+        label = n["label"][:22] + ("…" if len(n["label"]) > 22 else "")
+        circles.append(f'''
+        <g class="graph-node" transform="translate({x:.0f},{y:.0f})">
+          <circle r="7" fill="{color}"><title>{_e(n["node_type"])}: {_e(n["label"])}</title></circle>
+          <text x="10" y="4" class="graph-label">{_e(label)}</text>
+        </g>''')
+
+    legend = "".join(
+        f'<span class="legend-item"><i style="background:{_NODE_COLORS.get(t, "#5b6472")}"></i>{_e(t)}</span>'
+        for t in sorted({n["node_type"] for n in nodes}))
+
+    return f'''
+    <div class="legend">{legend}</div>
+    <svg viewBox="0 0 {width} {height}" class="graph-svg">
+      {"".join(lines)}
+      {"".join(circles)}
+    </svg>'''
 
 
 # --------------------------------------------------------------------------
@@ -267,6 +381,14 @@ body.engagement .engagement-only { display:table-cell; }
 .muted { color:var(--muted); }
 .limitations { background:var(--surface); border:1px solid var(--border);
                border-left:4px solid var(--med); border-radius:10px; padding:16px; }
+.graph-svg { width:100%; height:auto; background:var(--surface);
+             border:1px solid var(--border); border-radius:10px; }
+.graph-edge { stroke:var(--border); stroke-width:1.2; }
+.graph-node circle { stroke:var(--surface); stroke-width:1.5; cursor:default; }
+.graph-label { font-size:9px; fill:var(--muted); pointer-events:none; }
+.legend { display:flex; flex-wrap:wrap; gap:12px; margin-bottom:10px; font-size:12px; color:var(--muted); }
+.legend-item { display:flex; align-items:center; gap:5px; }
+.legend-item i { width:9px; height:9px; border-radius:50%; display:inline-block; }
 """
 
 _JS = """
@@ -334,6 +456,11 @@ def _render_html(data: dict) -> str:
   <section>
     <h2>Changes since previous scan</h2>
     {_diff_section(data['diff'], data['previous_scan_id'], scan['id'])}
+  </section>
+
+  <section>
+    <h2>Knowledge Graph</h2>
+    {_render_graph_svg(data['graph'])}
   </section>
 
   <section>
