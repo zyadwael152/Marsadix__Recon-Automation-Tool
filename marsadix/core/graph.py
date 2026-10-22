@@ -250,11 +250,83 @@ def blast_radius(conn, scan_id: int, node_id: str, max_hops: int = 2) -> list[di
 
 
 # --------------------------------------------------------------------------
+# terminal tree rendering (G5 text view -- the HTML report has the SVG one)
+# --------------------------------------------------------------------------
+
+def _build_adjacency(nodes: list[dict], edges: list[dict]) -> tuple[dict, dict]:
+    adj: dict[str, list] = {n["id"]: [] for n in nodes}
+    labels = {n["id"]: (n["node_type"], n["label"]) for n in nodes}
+    for e in edges:
+        if e["src_id"] in adj and e["dst_id"] in adj:
+            adj[e["src_id"]].append((e["dst_id"], e["relation"], "out"))
+            adj[e["dst_id"]].append((e["src_id"], e["relation"], "in"))
+    return adj, labels
+
+
+def _print_tree(root: str, adj: dict, labels: dict, visited: set,
+                 prefix: str = "", max_depth: int = 4) -> None:
+    """Box-drawing tree, one relationship per line, like `tree`/`git log --graph`."""
+    children = [c for c in adj.get(root, []) if c[0] not in visited]
+    for i, (child_id, relation, direction) in enumerate(children):
+        visited.add(child_id)
+        is_last = i == len(children) - 1
+        connector = "└─" if is_last else "├─"
+        arrow = "→" if direction == "out" else "←"
+        ntype, label = labels.get(child_id, ("?", child_id))
+        print(f"{prefix}{connector} {relation} {arrow} {ntype}:{label}")
+        if max_depth > 0:
+            _print_tree(child_id, adj, labels, visited,
+                        prefix + ("   " if is_last else "│  "), max_depth - 1)
+
+
+def render_graph_ascii(graph: dict) -> None:
+    """
+    Print the graph as indented trees, one per connected component -- a
+    terminal-friendly stand-in for the SVG in the HTML report, since a
+    literal node/edge *drawing* doesn't translate to a text terminal, but
+    the same relationships do.
+    """
+    nodes, edges = graph.get("nodes", []), graph.get("edges", [])
+    if not nodes:
+        print("\n(no graph data for this scan yet)")
+        return
+
+    adj, labels = _build_adjacency(nodes, edges)
+    visited: set = set()
+    isolated: list[str] = []
+    printed_any = False
+
+    print("\nGraph structure:")
+    for n in nodes:
+        if n["id"] in visited:
+            continue
+        if not adj.get(n["id"]):
+            isolated.append(n["label"])
+            visited.add(n["id"])
+            continue
+        visited.add(n["id"])
+        print(f"\n  {n['node_type']}:{n['label']}")
+        _print_tree(n["id"], adj, labels, visited, prefix="  ")
+        printed_any = True
+
+    if isolated:
+        shown = ", ".join(isolated[:10])
+        more = f", ... (+{len(isolated) - 10} more)" if len(isolated) > 10 else ""
+        print(f"\n  + {len(isolated)} node(s) with no relationships: {shown}{more}")
+    if not printed_any and not isolated:
+        print("  (nothing to show)")
+
+
+# --------------------------------------------------------------------------
 # `marsadix graph <target>` CLI command
 # --------------------------------------------------------------------------
 
-def run_graph(conn, target: str, scan_id: Optional[int] = None) -> int:
-    """Entry point for `marsadix graph`. Builds + prints a summary. Returns an exit code."""
+def run_graph(conn, target: str, scan_id: Optional[int] = None, ascii_tree: bool = True) -> int:
+    """
+    Entry point for `marsadix graph`. Builds + prints a summary, and (unless
+    ascii_tree=False) a terminal tree view of the graph's structure. Returns
+    an exit code.
+    """
     if scan_id is None:
         latest = db.get_latest_scans(conn, target, limit=1)
         if not latest:
@@ -297,5 +369,8 @@ def run_graph(conn, target: str, scan_id: Optional[int] = None) -> int:
             others = [r["label"] for r in radius if r["node_type"] != "subdomain" or r["label"] != f["host"]]
             print(f"  {f['cve_id']} on {f['host']}: reaches {len(radius)} node(s)"
                   + (f" -> {', '.join(others[:5])}" if others else ""))
+
+    if ascii_tree:
+        render_graph_ascii(db.get_graph(conn, scan_id))
 
     return 0
