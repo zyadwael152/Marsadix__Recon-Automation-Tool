@@ -49,12 +49,23 @@ def compute_diff(conn, old_id: int, new_id: int) -> ScanDiff:
     old_ports = {f'{r["host"]}:{r["port"]}' for r in db.get_services(conn, old_id)}
     new_ports = {f'{r["host"]}:{r["port"]}' for r in db.get_services(conn, new_id)}
 
-    old_tech = {(r["host"], r["name"]): r["version"] for r in db.get_technologies(conn, old_id)}
-    new_tech = {(r["host"], r["name"]): r["version"] for r in db.get_technologies(conn, new_id)}
+    def _versions(scan_id: int) -> dict:
+        """(host, tech name) -> set of versions. A set, not one value: a host can
+        run several versions of the same technology, and a plain dict kept only
+        the last one saved, hiding real changes."""
+        out: dict = {}
+        for r in db.get_technologies(conn, scan_id):
+            out.setdefault((r["host"], r["name"]), set()).add(r["version"] or "")
+        return out
+
+    def _fmt(versions: set) -> str:
+        return ", ".join(sorted(v for v in versions if v)) or "?"
+
+    old_tech, new_tech = _versions(old_id), _versions(new_id)
     changed_tech = [
-        f"{host}: {name} {old_tech[(host, name)] or '?'} -> {ver or '?'}"
-        for (host, name), ver in new_tech.items()
-        if (host, name) in old_tech and old_tech[(host, name)] != ver
+        f"{host}: {name} {_fmt(old_tech[(host, name)])} -> {_fmt(vers)}"
+        for (host, name), vers in new_tech.items()
+        if (host, name) in old_tech and old_tech[(host, name)] != vers
     ]
 
     old_findings = {r["dedup_key"]: r for r in db.get_findings(conn, old_id)}

@@ -156,3 +156,29 @@ def test_run_snapshots_lists_all_scans_in_order(conn, capsys):
     assert f"#{s1.id}" in out and f"#{s2.id}" in out
     assert out.index(f"#{s1.id}") < out.index(f"#{s2.id}")  # oldest first
     assert "(baseline)" in out
+
+
+def test_diff_reports_upgrade_of_one_version_when_host_runs_two(conn):
+    """A plain {(host, name): version} dict kept only the last version saved, so
+    the 1.18 -> 1.30 upgrade below was invisible."""
+    old = _mk_scan(conn, "example.com")
+    new = _mk_scan(conn, "example.com")
+    db.save_many(conn, "technologies", [
+        Technology(scan_id=old.id, host="a.example.com", name="nginx", version="1.18"),
+        Technology(scan_id=old.id, host="a.example.com", name="nginx", version="1.24"),
+        Technology(scan_id=new.id, host="a.example.com", name="nginx", version="1.24"),
+        Technology(scan_id=new.id, host="a.example.com", name="nginx", version="1.30"),
+    ])
+    d = compute_diff(conn, old.id, new.id)
+    assert d.changed_technologies == ["a.example.com: nginx 1.18, 1.24 -> 1.24, 1.30"]
+
+
+def test_diff_does_not_report_identical_multi_version_hosts(conn):
+    old = _mk_scan(conn, "example.com")
+    new = _mk_scan(conn, "example.com")
+    for s in (old, new):
+        db.save_many(conn, "technologies", [
+            Technology(scan_id=s.id, host="a.example.com", name="nginx", version="1.18"),
+            Technology(scan_id=s.id, host="a.example.com", name="nginx", version="1.24"),
+        ])
+    assert compute_diff(conn, old.id, new.id).changed_technologies == []

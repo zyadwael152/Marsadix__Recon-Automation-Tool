@@ -260,3 +260,50 @@ def test_get_neighbors_treats_scan_id_zero_as_a_scan(conn):
     conn.commit()
     assert db.get_neighbors(conn, "a", scan_id=0) == []
     assert [n["id"] for n in db.get_neighbors(conn, "a")] == ["b"]
+
+
+# ---------------------------------------------------------------------------
+# Technology version is part of a technology node's identity
+# ---------------------------------------------------------------------------
+
+def test_two_versions_of_same_technology_on_one_host_are_two_nodes(conn):
+    scan = _mk_scan(conn)
+    db.save_many(conn, "assets", [Asset(scan_id=scan.id, host="a.example.com", ip="1.1.1.1", in_scope=True)])
+    db.save_many(conn, "technologies", [
+        Technology(scan_id=scan.id, host="a.example.com", name="nginx", version="1.18"),
+        Technology(scan_id=scan.id, host="a.example.com", name="nginx", version="1.24"),
+    ])
+    build_graph(conn, scan.id)
+
+    g = db.get_graph(conn, scan.id)
+    techs = {n["id"]: n["label"] for n in g["nodes"] if n["node_type"] == "technology"}
+    assert techs == {"technology:a.example.com:nginx:1.18": "nginx 1.18",
+                     "technology:a.example.com:nginx:1.24": "nginx 1.24"}
+    uses = {(e["src_id"], e["dst_id"]) for e in g["edges"] if e["relation"] == "uses"}
+    assert ("subdomain:a.example.com", "technology:a.example.com:nginx:1.18") in uses
+    assert ("subdomain:a.example.com", "technology:a.example.com:nginx:1.24") in uses
+
+
+def test_technology_without_version_keeps_a_versionless_id(conn):
+    scan = _mk_scan(conn)
+    db.save_many(conn, "assets", [Asset(scan_id=scan.id, host="a.example.com", in_scope=True)])
+    db.save_many(conn, "technologies", [Technology(scan_id=scan.id, host="a.example.com", name="react")])
+    build_graph(conn, scan.id)
+    assert "technology:a.example.com:react" in {n["id"] for n in db.get_graph(conn, scan.id)["nodes"]}
+
+
+def test_finding_by_technology_name_links_every_version_on_the_host(conn):
+    """A finding only carries the technology NAME, so with 2 versions present we
+    cannot know which is affected -- both are linked to the CVE."""
+    scan = _mk_scan(conn)
+    db.save_many(conn, "assets", [Asset(scan_id=scan.id, host="a.example.com", in_scope=True)])
+    db.save_many(conn, "technologies", [
+        Technology(scan_id=scan.id, host="a.example.com", name="nginx", version="1.18"),
+        Technology(scan_id=scan.id, host="a.example.com", name="nginx", version="1.24"),
+    ])
+    db.save_many(conn, "findings", [
+        Finding(scan_id=scan.id, host="a.example.com", title="x", cve_id="CVE-2024-5", technology="nginx")])
+    build_graph(conn, scan.id)
+
+    affected = {e["src_id"] for e in db.get_graph(conn, scan.id)["edges"] if e["relation"] == "affected_by"}
+    assert affected == {"technology:a.example.com:nginx:1.18", "technology:a.example.com:nginx:1.24"}

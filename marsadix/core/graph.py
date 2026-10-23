@@ -77,8 +77,15 @@ def _n_cpe(cpe: str) -> str:
     return f"cpe:{cpe}"
 
 
-def _n_technology(host: str, name: str) -> str:
-    return f"technology:{host}:{name}"
+def _n_technology(host: str, name: str, version: Optional[str] = None) -> str:
+    """
+    The version is part of the identity: nginx 1.18 and nginx 1.24 on the same
+    host are two different things (different CVEs apply). Without it the two
+    collapsed into one node and the last one saved silently won. No version ->
+    the id has no version suffix.
+    """
+    v = (version or "").strip()
+    return f"technology:{host}:{name}:{v}" if v else f"technology:{host}:{name}"
 
 
 def _n_cve(cve_id: str) -> str:
@@ -132,12 +139,25 @@ def build_graph(conn, scan_id: int) -> dict:
             node(sid, "subdomain", host, {"in_scope": None, "inferred": True})
         return sid
 
-    def ensure_technology(host: str, name: str) -> str:
+    # (host, tech name) -> node ids of every version seen for it in this scan
+    tech_ids: dict[tuple[str, str], list[str]] = {}
+
+    def technology_nodes_for(host: str, name: str) -> list[str]:
+        """
+        Node(s) a finding that only knows the technology NAME should attach to.
+        A finding carries no version, so if the host runs several versions of
+        that technology we cannot tell which one is affected: all of them are
+        linked (the conservative choice for a blast-radius view).
+        If no technology row exists at all, a versionless node is created.
+        """
+        ids = tech_ids.get((host, name))
+        if ids:
+            return ids
         tid = _n_technology(host, name)
-        if tid not in seen_nodes:
-            node(tid, "technology", name, {"inferred": True})
-            edge(ensure_subdomain(host), tid, "uses")
-        return tid
+        node(tid, "technology", name, {"inferred": True})
+        edge(ensure_subdomain(host), tid, "uses")
+        tech_ids[(host, name)] = [tid]
+        return [tid]
 
     for a in db.get_assets(conn, scan_id):
         host = a["host"]
@@ -176,9 +196,10 @@ def build_graph(conn, scan_id: int) -> dict:
     for t in db.get_technologies(conn, scan_id):
         host = t["host"]
         sub = ensure_subdomain(host)
-        tech = node(_n_technology(host, t["name"]), "technology",
+        tech = node(_n_technology(host, t["name"], t["version"]), "technology",
                     f"{t['name']} {t['version']}".strip(),
-                    {"cpe": t["cpe"], "category": t["category"]})
+                    {"cpe": t["cpe"], "category": t["category"], "version": t["version"] or None})
+        tech_ids.setdefault((host, t["name"]), []).append(tech)
         edge(sub, tech, "uses")
         if t["cpe"]:
             cpe = node(_n_cpe(t["cpe"]), "cpe", t["cpe"])
@@ -195,7 +216,8 @@ def build_graph(conn, scan_id: int) -> dict:
             cve = node(_n_cve(f["cve_id"]), "cve", f["cve_id"], {"in_kev": bool(f["in_kev"])})
             edge(finding, cve, "listed_in")
             if f["technology"]:
-                edge(ensure_technology(host, f["technology"]), cve, "affected_by")
+                for tech_id in technology_nodes_for(host, f["technology"]):
+                    edge(tech_id, cve, "affected_by")
             else:
                 edge(sub, cve, "affected_by")
 
