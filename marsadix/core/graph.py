@@ -96,23 +96,48 @@ def _n_finding(finding_id: int) -> str:
 def build_graph(conn, scan_id: int) -> dict:
     """
     Read one scan's assets/services/technologies/findings and write the
-    corresponding nodes/edges. Returns {"nodes": n, "edges": n} written.
-    Idempotent: calling this again for the same scan just re-writes the
-    same rows (upsert / INSERT OR IGNORE), so it's safe to call from both
-    the automatic pipeline stage and the `marsadix graph` CLI command.
+    corresponding nodes/edges. Returns {"nodes": n, "edges": n} written
+    (unique nodes / unique edges, so the numbers match what get_graph returns).
+
+    Rebuilds the scan's graph from scratch, so it is safe to call from both
+    the automatic pipeline stage and the `marsadix graph` CLI command, and a
+    re-run after the data changed does not keep stale rows.
+
+    Every edge needs both endpoints to exist (graph_edges has foreign keys to
+    graph_nodes). Real scans routinely produce a service, technology or
+    finding on a host that is NOT in the assets table (found by a different
+    tool, or filtered out of the asset list), so endpoints that were not
+    created from their own table are created on demand and marked
+    {"inferred": True} instead of crashing the whole graph stage.
     """
-    n_nodes = n_edges = 0
+    db.clear_graph_scan(conn, scan_id, commit=False)
+
+    seen_nodes: set[str] = set()
+    seen_edges: set[tuple[str, str, str]] = set()
 
     def node(node_id: str, node_type: str, label: str, attrs: Optional[dict] = None) -> str:
-        nonlocal n_nodes
-        db.upsert_graph_node(conn, node_id, node_type, label, scan_id, attrs)
-        n_nodes += 1
+        seen_nodes.add(node_id)
+        db.upsert_graph_node(conn, node_id, node_type, label, scan_id, attrs, commit=False)
         return node_id
 
     def edge(src: str, dst: str, relation: str) -> None:
-        nonlocal n_edges
-        db.add_graph_edge(conn, src, dst, relation, scan_id)
-        n_edges += 1
+        if (src, dst, relation) in seen_edges:
+            return
+        seen_edges.add((src, dst, relation))
+        db.add_graph_edge(conn, src, dst, relation, scan_id, commit=False)
+
+    def ensure_subdomain(host: str) -> str:
+        sid = _n_subdomain(host)
+        if sid not in seen_nodes:
+            node(sid, "subdomain", host, {"in_scope": None, "inferred": True})
+        return sid
+
+    def ensure_technology(host: str, name: str) -> str:
+        tid = _n_technology(host, name)
+        if tid not in seen_nodes:
+            node(tid, "technology", name, {"inferred": True})
+            edge(ensure_subdomain(host), tid, "uses")
+        return tid
 
     for a in db.get_assets(conn, scan_id):
         host = a["host"]
@@ -135,7 +160,7 @@ def build_graph(conn, scan_id: int) -> dict:
 
     for s in db.get_services(conn, scan_id):
         host, port = s["host"], s["port"]
-        sub = _n_subdomain(host)
+        sub = ensure_subdomain(host)
         p = node(_n_port(host, port), "port", f"{host}:{port}", {"protocol": s["protocol"]})
         edge(sub, p, "exposes")
 
@@ -150,7 +175,7 @@ def build_graph(conn, scan_id: int) -> dict:
 
     for t in db.get_technologies(conn, scan_id):
         host = t["host"]
-        sub = _n_subdomain(host)
+        sub = ensure_subdomain(host)
         tech = node(_n_technology(host, t["name"]), "technology",
                     f"{t['name']} {t['version']}".strip(),
                     {"cpe": t["cpe"], "category": t["category"]})
@@ -161,7 +186,7 @@ def build_graph(conn, scan_id: int) -> dict:
 
     for f in db.get_findings(conn, scan_id):
         host = f["host"]
-        sub = _n_subdomain(host)
+        sub = ensure_subdomain(host)
         finding = node(_n_finding(f["id"]), "finding", f["title"],
                        {"severity": f["severity"], "status": f["status"],
                         "owasp_category": f["owasp_category"], "exploited": False})
@@ -170,11 +195,12 @@ def build_graph(conn, scan_id: int) -> dict:
             cve = node(_n_cve(f["cve_id"]), "cve", f["cve_id"], {"in_kev": bool(f["in_kev"])})
             edge(finding, cve, "listed_in")
             if f["technology"]:
-                edge(_n_technology(host, f["technology"]), cve, "affected_by")
+                edge(ensure_technology(host, f["technology"]), cve, "affected_by")
             else:
                 edge(sub, cve, "affected_by")
 
-    return {"nodes": n_nodes, "edges": n_edges}
+    conn.commit()
+    return {"nodes": len(seen_nodes), "edges": len(seen_edges)}
 
 
 def run_stage(ctx) -> None:
@@ -339,9 +365,7 @@ def run_graph(conn, target: str, scan_id: Optional[int] = None, ascii_tree: bool
     print(f"Knowledge Graph for {target} (scan #{scan_id}): "
           f"{counts['nodes']} nodes, {counts['edges']} edges")
 
-    type_counts = conn.execute(
-        "SELECT node_type, COUNT(*) AS n FROM graph_nodes WHERE scan_id=? "
-        "GROUP BY node_type ORDER BY n DESC", (scan_id,)).fetchall()
+    type_counts = db.count_graph_nodes_by_type(conn, scan_id)
     if type_counts:
         print("\nNodes by type:")
         for r in type_counts:

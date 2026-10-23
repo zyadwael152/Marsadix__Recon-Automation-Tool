@@ -157,14 +157,26 @@ CREATE TABLE IF NOT EXISTS alerts (
 
 -- Knowledge Graph (G1): generic nodes/edges so any entity type can be linked
 -- without a schema change per relationship kind.
+--
+-- graph_nodes holds each real-world entity ONCE, identified by its
+-- deterministic id ("ip:1.2.3.4" is the same node in every scan). Which scans
+-- an entity appeared in -- and its per-scan attributes -- live in
+-- graph_scan_nodes. (Before schema v3 a single graph_nodes.scan_id column was
+-- overwritten by every new scan, so an older scan's graph silently lost every
+-- node it shared with a newer scan.)
 CREATE TABLE IF NOT EXISTS graph_nodes (
     id TEXT PRIMARY KEY,              -- e.g. "subdomain:api.example.com", "cve:CVE-2024-1234"
     node_type TEXT NOT NULL,          -- subdomain | ip | asn | cdn | port | service |
                                        -- technology | cpe | cve | finding | email | js_file |
                                        -- endpoint | certificate | org
-    label TEXT NOT NULL,
-    scan_id INTEGER REFERENCES scans(id) ON DELETE CASCADE,
-    attrs TEXT                        -- JSON blob of extra attributes
+    label TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS graph_scan_nodes (
+    scan_id INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+    node_id TEXT NOT NULL REFERENCES graph_nodes(id) ON DELETE CASCADE,
+    attrs TEXT,                       -- JSON blob of this scan's attributes for the node
+    PRIMARY KEY (scan_id, node_id)
 );
 
 CREATE TABLE IF NOT EXISTS graph_edges (
@@ -186,6 +198,7 @@ CREATE INDEX IF NOT EXISTS idx_findings_owasp ON findings(owasp_category);
 CREATE INDEX IF NOT EXISTS idx_scans_target  ON scans(target, started_at);
 CREATE INDEX IF NOT EXISTS idx_graph_edges_src ON graph_edges(src_id);
 CREATE INDEX IF NOT EXISTS idx_graph_edges_dst ON graph_edges(dst_id);
+CREATE INDEX IF NOT EXISTS idx_graph_scan_nodes ON graph_scan_nodes(node_id);
 
 -- One row, tracks which SCHEMA_VERSION this file was created/migrated at.
 CREATE TABLE IF NOT EXISTS schema_info (version INTEGER NOT NULL);
@@ -196,7 +209,7 @@ _COLMAP = {"cves": {"references": "refs"}}
 
 # schema version: bump this whenever SCHEMA_SQL changes, and tell the team
 # to delete their local marsadix.db (see TEAM_GUIDE.md step 15).
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # A column that was added in SCHEMA_VERSION 2. If a db file already has a
 # `findings` table but THIS column is missing, it predates the schema_info
@@ -440,35 +453,60 @@ def get_owasp_coverage(conn, scan_id: int) -> dict:
 # ------------------------------------------------------------- graph storage (G1)
 
 def upsert_graph_node(conn, node_id: str, node_type: str, label: str,
-                       scan_id: Optional[int] = None, attrs: Optional[dict] = None) -> None:
-    # Deliberately NOT "INSERT OR REPLACE": on a PRIMARY KEY conflict that
-    # deletes-then-reinserts the row, and graph_edges references
-    # graph_nodes(id) with ON DELETE CASCADE -- so re-upserting a node that
-    # already has edges (e.g. two hosts sharing one IP node) would silently
-    # wipe every edge already pointing at it. ON CONFLICT DO UPDATE updates
-    # the row in place, so existing edges survive.
+                       scan_id: Optional[int] = None, attrs: Optional[dict] = None,
+                       commit: bool = True) -> None:
+    """
+    Make sure the node exists, and (when scan_id is given) record that it
+    belongs to that scan with these attributes.
+
+    The node row itself is global and never tied to one scan. Deliberately NOT
+    "INSERT OR REPLACE": on a PRIMARY KEY conflict that deletes-then-reinserts
+    the row, and graph_edges references graph_nodes(id) with ON DELETE CASCADE
+    -- so re-upserting a node that already has edges (e.g. two hosts sharing
+    one IP node) would silently wipe every edge already pointing at it.
+    ON CONFLICT DO UPDATE updates the row in place, so existing edges survive.
+    """
     conn.execute(
-        "INSERT INTO graph_nodes (id, node_type, label, scan_id, attrs) VALUES (?, ?, ?, ?, ?) "
-        "ON CONFLICT(id) DO UPDATE SET "
-        "node_type=excluded.node_type, label=excluded.label, "
-        "scan_id=excluded.scan_id, attrs=excluded.attrs",
-        (node_id, node_type, label, scan_id, json.dumps(attrs or {})))
-    conn.commit()
+        "INSERT INTO graph_nodes (id, node_type, label) VALUES (?, ?, ?) "
+        "ON CONFLICT(id) DO UPDATE SET node_type=excluded.node_type, label=excluded.label",
+        (node_id, node_type, label))
+    if scan_id is not None:
+        conn.execute(
+            "INSERT INTO graph_scan_nodes (scan_id, node_id, attrs) VALUES (?, ?, ?) "
+            "ON CONFLICT(scan_id, node_id) DO UPDATE SET attrs=excluded.attrs",
+            (scan_id, node_id, json.dumps(attrs or {})))
+    if commit:
+        conn.commit()
 
 
 def add_graph_edge(conn, src_id: str, dst_id: str, relation: str,
-                    scan_id: Optional[int] = None) -> None:
+                    scan_id: Optional[int] = None, commit: bool = True) -> None:
     conn.execute(
         "INSERT OR IGNORE INTO graph_edges (src_id, dst_id, relation, scan_id) "
         "VALUES (?, ?, ?, ?)",
         (src_id, dst_id, relation, scan_id))
-    conn.commit()
+    if commit:
+        conn.commit()
+
+
+def clear_graph_scan(conn, scan_id: int, commit: bool = True) -> None:
+    """
+    Forget one scan's graph (its edges and node memberships) so it can be
+    rebuilt from scratch. The global node rows stay: other scans may use them.
+    Without this, re-running build_graph after the underlying data changed
+    would keep stale edges/nodes from the previous build.
+    """
+    conn.execute("DELETE FROM graph_edges WHERE scan_id=?", (scan_id,))
+    conn.execute("DELETE FROM graph_scan_nodes WHERE scan_id=?", (scan_id,))
+    if commit:
+        conn.commit()
 
 
 def get_graph(conn, scan_id: int) -> dict:
     """All nodes and edges for one scan, ready to hand to a visualizer."""
     nodes = conn.execute(
-        "SELECT id, node_type, label, attrs FROM graph_nodes WHERE scan_id=?",
+        "SELECT n.id, n.node_type, n.label, s.attrs FROM graph_scan_nodes s "
+        "JOIN graph_nodes n ON n.id = s.node_id WHERE s.scan_id=? ORDER BY n.id",
         (scan_id,)).fetchall()
     edges = conn.execute(
         "SELECT src_id, dst_id, relation FROM graph_edges WHERE scan_id=?",
@@ -479,14 +517,23 @@ def get_graph(conn, scan_id: int) -> dict:
     }
 
 
+def count_graph_nodes_by_type(conn, scan_id: int) -> list[sqlite3.Row]:
+    """[(node_type, n)] for one scan, biggest group first."""
+    return conn.execute(
+        "SELECT n.node_type AS node_type, COUNT(*) AS n FROM graph_scan_nodes s "
+        "JOIN graph_nodes n ON n.id = s.node_id WHERE s.scan_id=? "
+        "GROUP BY n.node_type ORDER BY n DESC, n.node_type", (scan_id,)).fetchall()
+
+
 def get_neighbors(conn, node_id: str, scan_id: Optional[int] = None) -> list[dict]:
     """Direct neighbors of one node, for blast-radius / attack-path queries (G3/G4)."""
+    scoped = scan_id is not None            # `if scan_id` would treat id 0 as "no scan"
     q = ("SELECT dst_id AS id, relation, 'out' AS direction FROM graph_edges "
-         "WHERE src_id=?" + (" AND scan_id=?" if scan_id else "") +
+         "WHERE src_id=?" + (" AND scan_id=?" if scoped else "") +
          " UNION ALL "
          "SELECT src_id AS id, relation, 'in' AS direction FROM graph_edges "
-         "WHERE dst_id=?" + (" AND scan_id=?" if scan_id else ""))
-    params = ([node_id, scan_id, node_id, scan_id] if scan_id
+         "WHERE dst_id=?" + (" AND scan_id=?" if scoped else ""))
+    params = ([node_id, scan_id, node_id, scan_id] if scoped
               else [node_id, node_id])
     rows = conn.execute(q, params).fetchall()
     return [dict(r) for r in rows]

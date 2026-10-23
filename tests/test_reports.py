@@ -91,3 +91,54 @@ def test_generate_report_includes_diff_when_previous_scan_exists(conn, tmp_path)
     assert rc == 0
     html_text = next(tmp_path.glob("*_report.html")).read_text(encoding="utf-8")
     assert "dev.example.com" in html_text
+
+
+# ---------------------------------------------------------------------------
+# Knowledge Graph SVG: performance + truncation regression tests
+# ---------------------------------------------------------------------------
+
+def _fake_graph(n):
+    nodes = [{"id": f"n{i}", "node_type": "subdomain", "label": f"host{i}.example.com"} for i in range(n)]
+    edges = [{"src_id": f"n{i}", "dst_id": f"n{i-1}", "relation": "resolves_to"} for i in range(1, n, 2)]
+    return {"nodes": nodes, "edges": edges}
+
+
+def test_graph_svg_for_large_graph_is_fast_and_says_it_was_truncated():
+    import time
+    from marsadix.reports.generate import MAX_GRAPH_NODES, _render_graph_svg
+
+    start = time.monotonic()
+    svg = _render_graph_svg(_fake_graph(1500))
+    elapsed = time.monotonic() - start
+
+    # the all-pairs layout needed ~25 s for 480 nodes; this must stay far below that
+    assert elapsed < 10, f"graph layout too slow: {elapsed:.1f}s"
+    assert f"Showing the {MAX_GRAPH_NODES} most relevant of 1500 nodes" in svg
+    assert svg.count('class="graph-node"') == MAX_GRAPH_NODES
+
+
+def test_graph_svg_small_graph_is_not_truncated():
+    from marsadix.reports.generate import _render_graph_svg
+    svg = _render_graph_svg(_fake_graph(30))
+    assert "Showing the" not in svg
+    assert svg.count('class="graph-node"') == 30
+
+
+def test_select_visible_keeps_findings_and_cves_first():
+    from marsadix.reports.generate import _select_visible
+    nodes = [{"id": f"s{i}", "node_type": "subdomain", "label": "s"} for i in range(10)]
+    nodes += [{"id": "f1", "node_type": "finding", "label": "f"}, {"id": "c1", "node_type": "cve", "label": "c"}]
+    edges = [{"src_id": "f1", "dst_id": "c1", "relation": "listed_in"}]
+    kept, kept_edges, hidden = _select_visible(nodes, edges, limit=3)
+    assert {"f1", "c1"} <= {n["id"] for n in kept}
+    assert hidden == 9 and len(kept) == 3
+    assert kept_edges == edges
+
+
+def test_layout_is_deterministic_and_stays_inside_the_canvas():
+    from marsadix.reports.generate import _layout_graph
+    g = _fake_graph(60)
+    a = _layout_graph(g["nodes"], g["edges"])
+    b = _layout_graph(g["nodes"], g["edges"])
+    assert a == b
+    assert all(40 <= x <= 920 and 40 <= y <= 580 for x, y in a.values())

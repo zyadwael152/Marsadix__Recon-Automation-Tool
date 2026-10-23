@@ -140,3 +140,123 @@ def test_pipeline_graph_stage_builds_automatically(conn):
     graph = db.get_graph(conn, scan.id)
     assert len(graph["nodes"]) > 0
     assert len(graph["edges"]) > 0
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for the graph bugs found in code review
+# ---------------------------------------------------------------------------
+
+def test_build_graph_service_on_host_missing_from_assets(conn):
+    """Used to crash with IntegrityError (FK) -- the whole graph stage failed."""
+    scan = _mk_scan(conn)
+    db.save_many(conn, "assets", [Asset(scan_id=scan.id, host="a.example.com", ip="1.1.1.1", in_scope=True)])
+    db.save_many(conn, "services", [Service(scan_id=scan.id, host="b.example.com", port=80, name="http")])
+
+    build_graph(conn, scan.id)
+
+    g = db.get_graph(conn, scan.id)
+    ids = {n["id"] for n in g["nodes"]}
+    assert {"subdomain:a.example.com", "subdomain:b.example.com", "port:b.example.com:80"} <= ids
+    # the host we had to infer is flagged as such, not passed off as inventory
+    inferred = next(n for n in g["nodes"] if n["id"] == "subdomain:b.example.com")
+    assert '"inferred": true' in inferred["attrs"]
+
+
+def test_build_graph_finding_with_technology_not_in_technologies_table(conn):
+    scan = _mk_scan(conn)
+    db.save_many(conn, "assets", [Asset(scan_id=scan.id, host="a.example.com", ip="1.1.1.1", in_scope=True)])
+    db.save_many(conn, "findings", [
+        Finding(scan_id=scan.id, host="a.example.com", title="x", cve_id="CVE-2024-1", technology="nginx")])
+
+    build_graph(conn, scan.id)
+
+    g = db.get_graph(conn, scan.id)
+    assert "technology:a.example.com:nginx" in {n["id"] for n in g["nodes"]}
+    rels = {(e["src_id"], e["dst_id"], e["relation"]) for e in g["edges"]}
+    assert ("technology:a.example.com:nginx", "cve:CVE-2024-1", "affected_by") in rels
+    assert ("subdomain:a.example.com", "technology:a.example.com:nginx", "uses") in rels
+
+
+def test_build_graph_finding_on_host_missing_from_assets(conn):
+    scan = _mk_scan(conn)
+    db.save_many(conn, "findings", [Finding(scan_id=scan.id, host="ghost.example.com", title="x")])
+
+    counts = build_graph(conn, scan.id)
+
+    assert counts["nodes"] == 2          # the finding + the inferred host
+    assert counts["edges"] == 1          # found_on
+
+
+def test_older_scan_graph_survives_a_newer_scan(conn):
+    """
+    Nodes shared between scans (same IP, same host) used to be re-tagged with
+    the newest scan_id, so the older scan's graph lost them: 3 nodes -> 0.
+    """
+    def seed(scan_id):
+        db.save_many(conn, "assets", [
+            Asset(scan_id=scan_id, host="a.example.com", ip="1.1.1.1", in_scope=True),
+            Asset(scan_id=scan_id, host="b.example.com", ip="1.1.1.1", in_scope=True)])
+
+    s1 = _mk_scan(conn)
+    seed(s1.id)
+    build_graph(conn, s1.id)
+    before = db.get_graph(conn, s1.id)
+
+    s2 = _mk_scan(conn, is_baseline=False)
+    seed(s2.id)
+    build_graph(conn, s2.id)
+
+    after = db.get_graph(conn, s1.id)
+    assert len(before["nodes"]) == 3
+    assert {n["id"] for n in after["nodes"]} == {n["id"] for n in before["nodes"]}
+    assert len(after["edges"]) == len(before["edges"])
+    assert len(db.get_graph(conn, s2.id)["nodes"]) == 3
+    # and the per-scan queries still work on the OLD scan
+    assert "ip:1.1.1.1" in next(iter(get_shared_infrastructure(conn, s1.id)["resolves_to"]))
+
+
+def test_node_attributes_are_kept_per_scan(conn):
+    s1 = _mk_scan(conn)
+    db.save_many(conn, "assets", [Asset(scan_id=s1.id, host="a.example.com", in_scope=True, confidence_score=20)])
+    build_graph(conn, s1.id)
+    s2 = _mk_scan(conn, is_baseline=False)
+    db.save_many(conn, "assets", [Asset(scan_id=s2.id, host="a.example.com", in_scope=True, confidence_score=80)])
+    build_graph(conn, s2.id)
+
+    a1 = next(n for n in db.get_graph(conn, s1.id)["nodes"] if n["id"] == "subdomain:a.example.com")
+    a2 = next(n for n in db.get_graph(conn, s2.id)["nodes"] if n["id"] == "subdomain:a.example.com")
+    assert '"confidence_score": 20' in a1["attrs"]
+    assert '"confidence_score": 80' in a2["attrs"]
+
+
+def test_rebuild_drops_stale_graph_rows(conn):
+    scan = _mk_scan(conn)
+    db.save_many(conn, "assets", [
+        Asset(scan_id=scan.id, host="a.example.com", ip="1.1.1.1", in_scope=True),
+        Asset(scan_id=scan.id, host="b.example.com", ip="2.2.2.2", in_scope=True)])
+    build_graph(conn, scan.id)
+    conn.execute("DELETE FROM assets WHERE scan_id=? AND host='b.example.com'", (scan.id,))
+    conn.commit()
+
+    build_graph(conn, scan.id)
+
+    ids = {n["id"] for n in db.get_graph(conn, scan.id)["nodes"]}
+    assert "subdomain:b.example.com" not in ids
+    assert "ip:2.2.2.2" not in ids
+
+
+def test_build_graph_counts_match_what_get_graph_returns(conn):
+    scan = _mk_scan(conn)
+    _seed(conn, scan.id)
+    counts = build_graph(conn, scan.id)
+    g = db.get_graph(conn, scan.id)
+    assert counts == {"nodes": len(g["nodes"]), "edges": len(g["edges"])}
+
+
+def test_get_neighbors_treats_scan_id_zero_as_a_scan(conn):
+    # `if scan_id:` used to ignore a (hypothetical) scan id 0 and search every scan
+    conn.execute("INSERT INTO graph_nodes (id, node_type, label) VALUES ('a','x','a'), ('b','x','b')")
+    conn.execute("INSERT INTO graph_edges (src_id, dst_id, relation, scan_id) VALUES ('a','b','r', NULL)")
+    conn.commit()
+    assert db.get_neighbors(conn, "a", scan_id=0) == []
+    assert [n["id"] for n in db.get_neighbors(conn, "a")] == ["b"]

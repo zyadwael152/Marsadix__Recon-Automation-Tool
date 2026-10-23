@@ -169,38 +169,90 @@ _EDGE_GROUP = {
 }
 
 
+# The report is a static SVG, so a graph with thousands of nodes is unreadable
+# anyway. Past this many nodes only the most informative ones are drawn
+# (findings and CVEs first, then the best-connected nodes) and the page says
+# how many were left out. The full graph is still in the JSON report and in
+# `marsadix graph`.
+MAX_GRAPH_NODES = 400
+
+
+def _select_visible(nodes: list[dict], edges: list[dict],
+                     limit: int = MAX_GRAPH_NODES) -> tuple[list[dict], list[dict], int]:
+    """Returns (nodes_to_draw, edges_between_them, number_of_nodes_left_out)."""
+    if len(nodes) <= limit:
+        return nodes, edges, 0
+    degree: dict[str, int] = {n["id"]: 0 for n in nodes}
+    for e in edges:
+        if e["src_id"] in degree:
+            degree[e["src_id"]] += 1
+        if e["dst_id"] in degree:
+            degree[e["dst_id"]] += 1
+    ranked = sorted(nodes, key=lambda n: (
+        0 if n["node_type"] in ("finding", "cve") else 1, -degree[n["id"]], n["id"]))
+    keep = ranked[:limit]
+    keep_ids = {n["id"] for n in keep}
+    kept_edges = [e for e in edges if e["src_id"] in keep_ids and e["dst_id"] in keep_ids]
+    return keep, kept_edges, len(nodes) - limit
+
+
 def _layout_graph(nodes: list[dict], edges: list[dict],
-                   width: int = 960, height: int = 620, iterations: int = 400) -> dict:
+                   width: int = 960, height: int = 620,
+                   iterations: Optional[int] = None) -> dict:
     """
     Force-directed layout (Fruchterman-Reingold style), pure Python, no
     dependency. Nodes repel each other; edges act like springs pulling
     connected nodes together. Deterministic (seeded) so re-generating the
-    report for the same scan draws the same picture. More iterations than a
-    naive implementation (400) so graphs with 0 or few edges -- where only
-    repulsion is doing any work -- still settle into an even spread instead
-    of a cramped, half-converged cluster.
+    report for the same scan draws the same picture.
+
+    Repulsion used to be computed between EVERY pair of nodes, 400 times:
+    O(n^2 * 400), which took ~25 s for 480 nodes and minutes for a real
+    target. Repulsion falls off with distance, so it is now only computed
+    between nodes in the same or neighbouring cell of a grid whose cell is
+    2*k wide (k = the ideal edge length). Cost is now roughly linear in the
+    number of nodes. The picture is NOT pixel-identical to the all-pairs
+    version for mid-sized graphs (distant repulsion is dropped), but it is
+    just as well spread: measured on 120 nodes the all-pairs layout left some
+    nodes stacked on top of each other, this one keeps >= ~11px between them.
     """
     if not nodes:
         return {}
+    n = len(nodes)
+    if iterations is None:
+        iterations = 400 if n <= 150 else 200
     rng = random.Random(42)
-    pos = {n["id"]: [rng.uniform(0, width), rng.uniform(0, height)] for n in nodes}
+    pos = {nd["id"]: [rng.uniform(0, width), rng.uniform(0, height)] for nd in nodes}
     valid_ids = set(pos)
-    k = math.sqrt((width * height) / max(len(nodes), 1))
+    k = math.sqrt((width * height) / max(n, 1))
+    cell = 2 * k
 
     safe_edges = [e for e in edges if e["src_id"] in valid_ids and e["dst_id"] in valid_ids]
 
     for it in range(iterations):
         disp = {nid: [0.0, 0.0] for nid in pos}
-        ids = list(pos.keys())
-        for i in range(len(ids)):
-            for j in range(i + 1, len(ids)):
-                a, b = ids[i], ids[j]
-                dx, dy = pos[a][0] - pos[b][0], pos[a][1] - pos[b][1]
-                dist = math.hypot(dx, dy) or 0.01
-                force = (k * k) / dist
-                ux, uy = dx / dist, dy / dist
-                disp[a][0] += ux * force; disp[a][1] += uy * force
-                disp[b][0] -= ux * force; disp[b][1] -= uy * force
+
+        grid: dict[tuple[int, int], list[str]] = {}
+        for nid, (x, y) in pos.items():
+            grid.setdefault((int(x // cell), int(y // cell)), []).append(nid)
+
+        for (cx, cy), members in grid.items():
+            for ox in (-1, 0, 1):
+                for oy in (-1, 0, 1):
+                    others = grid.get((cx + ox, cy + oy))
+                    if not others:
+                        continue
+                    for a in members:
+                        ax, ay = pos[a]
+                        for b in others:
+                            if a >= b:          # visit each unordered pair once
+                                continue
+                            dx, dy = ax - pos[b][0], ay - pos[b][1]
+                            dist = math.hypot(dx, dy) or 0.01
+                            force = (k * k) / dist
+                            ux, uy = dx / dist, dy / dist
+                            disp[a][0] += ux * force; disp[a][1] += uy * force
+                            disp[b][0] -= ux * force; disp[b][1] -= uy * force
+
         for e in safe_edges:
             a, b = e["src_id"], e["dst_id"]
             dx, dy = pos[a][0] - pos[b][0], pos[a][1] - pos[b][1]
@@ -224,6 +276,13 @@ def _render_graph_svg(graph: dict) -> str:
     nodes, edges = graph.get("nodes", []), graph.get("edges", [])
     if not nodes:
         return '<p class="muted">No graph data for this scan (recon/web/asm haven\'t run yet).</p>'
+
+    total_nodes = len(nodes)
+    nodes, edges, hidden = _select_visible(nodes, edges)
+    truncated_note = (
+        f'<p class="muted">Showing the {len(nodes)} most relevant of {total_nodes} nodes '
+        f'(findings, CVEs and best-connected nodes first). The full graph is in the JSON '
+        f'report and in <code>marsadix graph</code>.</p>') if hidden else ""
 
     width, height = 960, 620
     pos = _layout_graph(nodes, edges, width, height)
@@ -279,6 +338,7 @@ def _render_graph_svg(graph: dict) -> str:
         for t in sorted({n["node_type"] for n in nodes}))
 
     return f'''
+    {truncated_note}
     <div class="legend">{legend}</div>
     <svg viewBox="0 0 {width} {height}" class="graph-svg">
       <defs>
