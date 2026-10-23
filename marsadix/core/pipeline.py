@@ -50,6 +50,22 @@ class Context:
     def target(self) -> str:
         return self.scan.target
 
+    @property
+    def mode(self) -> str:
+        """This run's mode: "passive" | "standard" | "full" (C15)."""
+        m = self.scan.mode
+        return getattr(m, "value", m)
+
+    def allows(self, minimum: str) -> bool:
+        """
+        True if this run's mode is at least `minimum`. Stages that contact the
+        target must gate themselves on this:
+
+            if not ctx.allows("standard"):   # passive: no contact with the target
+                return {"skipped": "..."}
+        """
+        return SCAN_MODES.index(self.mode) >= SCAN_MODES.index(minimum)
+
     def in_scope(self, host: str) -> bool:
         return self.scope.is_in_scope(host)
 
@@ -88,9 +104,13 @@ def run_scan(target: str, config: Config, scope: Optional[Scope] = None,
     resolved_mode = config.scan_mode if mode is None else mode
     if resolved_mode not in SCAN_MODES:
         raise ConfigError(f"mode must be one of {SCAN_MODES}, got {resolved_mode!r}")
-    run_config = config
+    # The docstring above promises the resolved mode is on ctx.config.scan_mode
+    # for this run; it used to stay at the config.toml value, so a stage that
+    # read ctx.config.scan_mode saw "passive" even for `scan --mode full`.
+    overrides: dict = {"scan_mode": resolved_mode}
     if allow_injection is not None and allow_injection != config.allow_injection:
-        run_config = replace(config, allow_injection=allow_injection)
+        overrides["allow_injection"] = allow_injection
+    run_config = replace(config, **overrides)
 
     conn = db.connect(config.db_path)
     db.init_db(conn)
@@ -117,8 +137,14 @@ def run_scan(target: str, config: Config, scope: Optional[Scope] = None,
             continue
         try:
             log.info("stage '%s' started", name)
-            fn(ctx)
-            results.append(StageResult(name, "ok"))
+            outcome = fn(ctx)
+            # A stage that deliberately did nothing (e.g. the mode forbids it)
+            # returns {"skipped": "<reason>"} so `marsadix scan` reports it as
+            # skipped instead of a misleading "ok".
+            if isinstance(outcome, dict) and outcome.get("skipped"):
+                results.append(StageResult(name, "skipped", str(outcome["skipped"])))
+            else:
+                results.append(StageResult(name, "ok"))
         except Exception as e:  # one broken stage must not kill the scan
             log.exception("stage '%s' failed", name)
             results.append(StageResult(name, "failed", f"{type(e).__name__}: {e}"))
