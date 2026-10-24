@@ -122,6 +122,7 @@ install_go_tool subfinder   github.com/projectdiscovery/subfinder/v2/cmd/subfind
 install_go_tool assetfinder github.com/tomnomnom/assetfinder
 install_go_tool chaos       github.com/projectdiscovery/chaos-client/cmd/chaos
 install_go_tool httpx       github.com/projectdiscovery/httpx/cmd/httpx
+install_go_tool katana      github.com/projectdiscovery/katana/cmd/katana
 install_go_tool dnsx        github.com/projectdiscovery/dnsx/cmd/dnsx
 install_go_tool naabu       github.com/projectdiscovery/naabu/v2/cmd/naabu
 install_go_tool nuclei      github.com/projectdiscovery/nuclei/v3/cmd/nuclei
@@ -185,7 +186,7 @@ fi
 #    instead of unconditionally printing "installed successfully".
 echo ""
 echo -e "${BLUE}=== Installation report ===${RESET}"
-for t in subfinder assetfinder chaos httpx dnsx naabu nuclei gau ffuf amass findomain; do
+for t in subfinder assetfinder chaos httpx katana dnsx naabu nuclei gau ffuf amass findomain; do
     if command -v "$t" &>/dev/null; then
         echo -e "  ${GREEN}[OK]${RESET}   $t"
     else

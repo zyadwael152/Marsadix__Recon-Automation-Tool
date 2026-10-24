@@ -67,11 +67,32 @@ def test_scan_default_mode_is_passive(tmp_path, capsys):
     assert "[mode=passive]" in out
 
 
+def _scope_file(tmp_path):
+    f = tmp_path / "scope.txt"
+    f.write_text("example.com\n*.example.com\n")
+    return str(f)
+
+
 def test_scan_accepts_explicit_mode(tmp_path, capsys):
     dbp = str(tmp_path / "t.db")
-    main(["--db", dbp, "scan", "example.com", "--mode", "full"])
+    main(["--db", dbp, "scan", "example.com", "--mode", "full", "--scope", _scope_file(tmp_path)])
     out = capsys.readouterr().out
     assert "[mode=full]" in out
+
+
+@pytest.mark.parametrize("mode", ["standard", "full"])
+def test_scan_active_mode_without_scope_is_refused(tmp_path, capsys, mode):
+    dbp = tmp_path / "t.db"
+    rc = main(["--db", str(dbp), "scan", "example.com", "--mode", mode])
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "explicit scope" in err and "--scope" in err
+    assert not dbp.exists()
+
+
+def test_scan_rate_below_one_is_refused(tmp_path, capsys):
+    rc = main(["--db", str(tmp_path / "t.db"), "scan", "example.com", "--rate", "0"])
+    assert rc == 1 and "rate limit" in capsys.readouterr().err
 
 
 def test_scan_rejects_invalid_mode(tmp_path, capsys):

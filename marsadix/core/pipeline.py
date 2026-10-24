@@ -79,9 +79,19 @@ class StageResult:
 
 def run_scan(target: str, config: Config, scope: Optional[Scope] = None,
              max_depth: Optional[int] = None, rate_limit: Optional[int] = None,
-             mode: Optional[str] = None, allow_injection: Optional[bool] = None):
+             mode: Optional[str] = None, allow_injection: Optional[bool] = None,
+             scope_file: Optional[str] = None):
     """
     Create a scan, run every available stage, store the outcome.
+
+    `scope` (C15): required for "standard" and "full", which send traffic to the
+    target; ScopeError otherwise. Only "passive" may fall back to a scope
+    derived from the target itself (target + its subdomains). `scope_file` is
+    the path the scope was loaded from; it is stored on the scan record so a
+    report can say which scope authorised the scan.
+
+    `rate_limit`: max requests per second sent to the target; must be >= 1
+    (httpx/katana treat 0 as "unlimited", which is never what a typo meant).
 
     `mode` (C15): "passive" | "standard" | "full". Defaults to config.scan_mode.
     This is stored on the Scan record (ctx.scan.mode) and on ctx.config.scan_mode
@@ -96,18 +106,34 @@ def run_scan(target: str, config: Config, scope: Optional[Scope] = None,
     host = normalize_host(target)
     if not host:
         raise ScopeError(f"invalid target: {target!r}")
-    scope = scope or Scope.from_target(host)
-    decision = scope.check(host)
-    if not decision:
-        raise ScopeError(f"target '{host}' is not in scope ({decision.reason})")
 
     resolved_mode = config.scan_mode if mode is None else mode
     if resolved_mode not in SCAN_MODES:
         raise ConfigError(f"mode must be one of {SCAN_MODES}, got {resolved_mode!r}")
-    # The docstring above promises the resolved mode is on ctx.config.scan_mode
-    # for this run; it used to stay at the config.toml value, so a stage that
-    # read ctx.config.scan_mode saw "passive" even for `scan --mode full`.
-    overrides: dict = {"scan_mode": resolved_mode}
+
+    if scope is None:
+        if resolved_mode != "passive":
+            raise ScopeError(
+                f"mode '{resolved_mode}' sends traffic to the target, so it needs an "
+                f"explicit scope: pass a scope file (--scope scope.txt, see "
+                f"scope.example.txt). --mode passive does not need one.")
+        scope = Scope.from_target(host)
+    decision = scope.check(host)
+    if not decision:
+        raise ScopeError(f"target '{host}' is not in scope ({decision.reason})")
+
+    resolved_rate = config.rate_limit if rate_limit is None else rate_limit
+    if resolved_rate < 1:
+        raise ConfigError(f"rate limit must be at least 1 request/second, got {resolved_rate}")
+    resolved_depth = config.max_depth if max_depth is None else max_depth
+    if resolved_depth < 0:
+        raise ConfigError(f"max depth cannot be negative, got {resolved_depth}")
+
+    # The resolved values are put on ctx.config for this run: a stage reading
+    # ctx.config.scan_mode / rate_limit used to get the config.toml value even
+    # when the CLI flag said otherwise.
+    overrides: dict = {"scan_mode": resolved_mode, "rate_limit": resolved_rate,
+                       "max_depth": resolved_depth}
     if allow_injection is not None and allow_injection != config.allow_injection:
         overrides["allow_injection"] = allow_injection
     run_config = replace(config, **overrides)
@@ -120,9 +146,10 @@ def run_scan(target: str, config: Config, scope: Optional[Scope] = None,
         target=host,
         status=ScanStatus.RUNNING,
         is_baseline=first,
-        max_depth=config.max_depth if max_depth is None else max_depth,
-        rate_limit=config.rate_limit if rate_limit is None else rate_limit,
+        max_depth=resolved_depth,
+        rate_limit=resolved_rate,
         mode=ScanMode(resolved_mode),
+        scope_file=scope_file,
     )
     db.save_scan(conn, scan)
     log.info("scan #%s started: %s (baseline=%s, mode=%s)", scan.id, host, first, resolved_mode)

@@ -103,14 +103,15 @@ def cmd_scan(a, cfg: Config) -> int:
     if not target:
         print(f"error: invalid target: {a.target!r}", file=sys.stderr)
         return 1
-    if a.scope:
-        scope = Scope.from_file(a.scope)
-    else:
-        scope = Scope.from_target(target)
+    scope = Scope.from_file(a.scope) if a.scope else None
+    if scope is None and (a.mode or cfg.scan_mode) == "passive":
         log.warning("no --scope given: using %s and *.%s", target, target)
+    # (standard/full without --scope: run_scan refuses with a ScopeError, which
+    #  main() prints as "error: ..." -- no traffic is sent and no scan is created)
 
-    scan, results = run_scan(target, cfg, scope=scope, max_depth=a.depth, rate_limit=a.rate,
-                              mode=a.mode, allow_injection=(True if a.allow_injection else None))
+    scan, results = run_scan(target, cfg, scope=scope, scope_file=a.scope, max_depth=a.depth,
+                              rate_limit=a.rate, mode=a.mode,
+                              allow_injection=(True if a.allow_injection else None))
     print(f"\nScan #{scan.id} of {scan.target}: {scan.status.value}"
           f"{' (baseline)' if scan.is_baseline else ''} [mode={scan.mode.value}]")
     for r in results:

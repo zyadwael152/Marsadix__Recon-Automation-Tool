@@ -103,6 +103,13 @@ class Scope:
             name = (rule[2:] if wildcard else rule).lower().rstrip(".")
             if not _DOMAIN_RE.match(name):
                 raise ScopeError(f"{where}: invalid rule '{rule}'")
+            if wildcard and not exclude and "." not in name:
+                # "*.com" would put every .com site on the internet in scope.
+                # (Only the single-label case is caught: "*.co.uk" needs a
+                # public-suffix list to detect, which this tool does not ship.)
+                raise ScopeError(
+                    f"{where}: '{rule}' would put an entire top-level domain in scope; "
+                    f"use a domain you are authorised to test, e.g. *.example.com")
             if wildcard:
                 (s.ex_wildcards if exclude else s.wildcards).add(name)
             else:

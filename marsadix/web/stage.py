@@ -1,7 +1,8 @@
 """
-Web stage: probe the discovered hosts with httpx, crawl them with katana.
+Web stage: probe the discovered hosts with httpx, crawl them with katana, and
+store what was found.
 
-Both tools send traffic to the target, so this stage obeys two rules:
+Both tools send traffic to the target, so this stage obeys three rules:
 
 1. MODE (C15) -- what the scan mode allows:
 
@@ -16,14 +17,23 @@ Both tools send traffic to the target, so this stage obeys two rules:
    authorised to touch. The scope is checked again here (not just the stored
    flag), and tool OUTPUT is checked too, because a crawler follows links
    to hosts that were never in the input list.
+
+3. RATE (C6) -- the scan's rate limit (requests/second) is passed to both tools.
+
+Results go to the web_items table (live URLs with their HTTP status, plus
+crawled endpoints / JS files) so reports and later stages can use them; the
+txt files in config.output_dir are kept as a convenience for other tools.
 """
 
 import asyncio
 import logging
 import os
 from typing import Iterable, List
+from urllib.parse import urlsplit
 
 from .. import db
+from ..core.scope import normalize_host
+from ..models import DiscoverySource, WebItem, WebItemKind
 from .probe import run_httpx, run_katana
 
 logger = logging.getLogger(__name__)
@@ -39,6 +49,23 @@ def _write_lines(path: str, lines: List[str]) -> None:
         f.write("\n".join(lines) + "\n")
 
 
+def _canonical(url: str) -> str:
+    return url.rstrip("/")
+
+
+def _endpoint_item(scan_id: int, url: str) -> WebItem:
+    parts = urlsplit(url)
+    is_js = parts.path.lower().endswith((".js", ".mjs"))
+    return WebItem(
+        scan_id=scan_id,
+        host=normalize_host(url) or parts.netloc,
+        url=url,
+        kind=WebItemKind.JS_FILE if is_js else WebItemKind.ENDPOINT,
+        source=DiscoverySource.ACTIVE,
+        has_params=bool(parts.query),
+    )
+
+
 def run(ctx, *args, **kwargs) -> dict:
     logger.info("=== Starting Web stage (mode: %s) ===", ctx.mode)
 
@@ -48,7 +75,8 @@ def run(ctx, *args, **kwargs) -> dict:
         logger.info("[-] Web stage skipped: %s", reason)
         return {"skipped": reason, "live_urls": [], "endpoints": []}
 
-    assets = db.get_assets(ctx.conn, ctx.scan.id)
+    scan_id = ctx.scan.id
+    assets = db.get_assets(ctx.conn, scan_id)
     all_hosts = {a["host"] for a in assets}
     hosts = sorted({a["host"] for a in assets if a["in_scope"] and ctx.in_scope(a["host"])})
     if len(all_hosts) != len(hosts):
@@ -58,24 +86,36 @@ def run(ctx, *args, **kwargs) -> dict:
         logger.warning("[-] No in-scope hosts to probe. Skipping Web stage.")
         return {"live_urls": [], "endpoints": []}
 
-    logger.info("[+] Probing %d in-scope host(s)", len(hosts))
-    live_urls = _scoped(ctx, asyncio.run(run_httpx(hosts)))
+    rate = ctx.scan.rate_limit or ctx.config.rate_limit
+    logger.info("[+] Probing %d in-scope host(s) at <= %s req/s", len(hosts), rate)
+
+    probed = asyncio.run(run_httpx(hosts, rate))
+    live = [r for r in probed if ctx.in_scope(r["url"])]
+    live_urls = [r["url"] for r in live]
 
     endpoints: List[str] = []
     if live_urls and ctx.allows("full"):
-        endpoints = _scoped(ctx, asyncio.run(run_katana(live_urls)))
+        seen = {_canonical(u) for u in live_urls}           # the roots are already stored as live URLs
+        endpoints = [u for u in _scoped(ctx, asyncio.run(run_katana(live_urls, rate)))
+                     if _canonical(u) not in seen]
     elif live_urls:
         logger.info("[*] Crawling skipped: katana only runs in --mode full")
 
+    # ---- store in the database (UNIQUE(scan_id, url, kind): a re-run adds nothing twice)
+    items = [WebItem(scan_id=scan_id, host=normalize_host(r["url"]) or r["url"], url=r["url"],
+                     kind=WebItemKind.URL, source=DiscoverySource.ACTIVE,
+                     status_code=r["status_code"], has_params=False) for r in live]
+    items += [_endpoint_item(scan_id, u) for u in endpoints]
+    stored = db.save_many(ctx.conn, "web_items", items)
+    logger.info("[+] Stored %d web item(s): %d live URL(s), %d endpoint(s)/JS file(s)",
+                stored, len(live), len(endpoints))
+
+    # ---- plain-text copies (output_dir, which .gitignore already covers)
     out_dir = ctx.config.output_dir
     os.makedirs(out_dir, exist_ok=True)
     if live_urls:
-        path = os.path.join(out_dir, f"{ctx.target}_live_urls.txt")
-        _write_lines(path, live_urls)
-        logger.info("[+] Saved %d live URLs to %s", len(live_urls), path)
+        _write_lines(os.path.join(out_dir, f"{ctx.target}_live_urls.txt"), live_urls)
     if endpoints:
-        path = os.path.join(out_dir, f"{ctx.target}_endpoints.txt")
-        _write_lines(path, endpoints)
-        logger.info("[+] Saved %d endpoints to %s", len(endpoints), path)
+        _write_lines(os.path.join(out_dir, f"{ctx.target}_endpoints.txt"), endpoints)
 
-    return {"live_urls": live_urls, "endpoints": endpoints}
+    return {"live_urls": live_urls, "endpoints": endpoints, "stored": stored}

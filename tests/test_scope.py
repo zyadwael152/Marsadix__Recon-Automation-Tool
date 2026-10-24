@@ -81,3 +81,15 @@ def test_missing_file():
 def test_normalize_host():
     assert normalize_host("http://[::1]:80/x") == "::1"
     assert normalize_host("  ") is None
+
+
+def test_wildcard_over_a_whole_tld_is_rejected():
+    # "*.com" used to be accepted and put every .com site in scope
+    with pytest.raises(ScopeError, match="top-level domain"):
+        Scope.from_lines(["*.com"])
+
+
+def test_normal_wildcards_and_tld_exclusions_still_work():
+    sc = Scope.from_lines(["example.com", "*.example.com", "!*.internal"])
+    assert sc.is_in_scope("api.example.com")
+    assert not sc.is_in_scope("evil.com")
