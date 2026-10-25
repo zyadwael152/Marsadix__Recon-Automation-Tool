@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import urllib.parse
 import urllib.request
 from functools import partial
 from typing import Set, Tuple
@@ -22,7 +23,7 @@ async def fetch_virustotal(domain: str, api_key: str = None) -> Tuple[str, Set[s
     if not api_key:
         logger.warning("[-] Skipped VirusTotal (No API Key provided).")
         return "virustotal", subdomains
-        
+
     url = f"https://www.virustotal.com/api/v3/domains/{domain}/subdomains?limit=40"
     logger.info("[*] Querying VirusTotal...")
     try:
@@ -30,7 +31,7 @@ async def fetch_virustotal(domain: str, api_key: str = None) -> Tuple[str, Set[s
         req = urllib.request.Request(url, headers={'x-apikey': api_key})
         response = await loop.run_in_executor(
             None, partial(urllib.request.urlopen, req, timeout=HTTP_TIMEOUT))
-        
+
         if response.status == 200:
             data = json.loads(response.read().decode())
             for item in data.get('data', []):
@@ -40,8 +41,9 @@ async def fetch_virustotal(domain: str, api_key: str = None) -> Tuple[str, Set[s
         logger.info(f"[+] VirusTotal discovered {len(subdomains)} subdomains.")
     except Exception as e:
         logger.warning(f"[-] VirusTotal error: {e}")
-        
+
     return "virustotal", subdomains
+
 
 async def fetch_alienvault(domain: str, api_key: str = None) -> Tuple[str, Set[str]]:
     """
@@ -59,7 +61,7 @@ async def fetch_alienvault(domain: str, api_key: str = None) -> Tuple[str, Set[s
         req = urllib.request.Request(url, headers=headers)
         response = await loop.run_in_executor(
             None, partial(urllib.request.urlopen, req, timeout=HTTP_TIMEOUT))
-        
+
         if response.status == 200:
             data = json.loads(response.read().decode())
             for item in data.get('passive_dns', []):
@@ -69,5 +71,102 @@ async def fetch_alienvault(domain: str, api_key: str = None) -> Tuple[str, Set[s
         logger.info(f"[+] AlienVault discovered {len(subdomains)} subdomains.")
     except Exception as e:
         logger.warning(f"[-] AlienVault error: {e}")
-        
+
     return "alienvault", subdomains
+
+
+async def fetch_securitytrails(domain: str, api_key: str = None) -> Tuple[str, Set[str]]:
+    """Query SecurityTrails' subdomains endpoint and skip if no API key."""
+    subdomains = set()
+    if not api_key:
+        logger.info("[-] Skipped SecurityTrails (No API Key provided).")
+        return "securitytrails", subdomains
+
+    url = f"https://api.securitytrails.com/v1/domain/{domain}/subdomains"
+    logger.info("[*] Querying SecurityTrails...")
+    try:
+        loop = asyncio.get_event_loop()
+        req = urllib.request.Request(url, headers={'APIKEY': api_key})
+        response = await loop.run_in_executor(
+            None, partial(urllib.request.urlopen, req, timeout=HTTP_TIMEOUT))
+
+        if response.status == 200:
+            data = json.loads(response.read().decode())
+            # SecurityTrails returns bare labels ("www", "mail"), not FQDNs.
+            for label in data.get('subdomains', []):
+                label = label.strip().lower()
+                if label:
+                    subdomains.add(f"{label}.{domain}")
+        logger.info(f"[+] SecurityTrails discovered {len(subdomains)} subdomains.")
+    except Exception as e:
+        logger.warning(f"[-] SecurityTrails error: {e}")
+
+    return "securitytrails", subdomains
+
+
+async def fetch_shodan(domain: str, api_key: str = None) -> Tuple[str, Set[str]]:
+    """
+    Query Shodan's host search for hostnames seen under this domain and
+    skip if no API key. Shodan indexes IPs, not domains directly, so the
+    search is `hostname:<domain>` and hostnames are read off each match.
+    """
+    subdomains = set()
+    if not api_key:
+        logger.info("[-] Skipped Shodan (No API Key provided).")
+        return "shodan", subdomains
+
+    query = urllib.parse.quote(f"hostname:{domain}")
+    url = f"https://api.shodan.io/shodan/host/search?key={api_key}&query={query}"
+    logger.info("[*] Querying Shodan...")
+    try:
+        loop = asyncio.get_event_loop()
+        req = urllib.request.Request(url)
+        response = await loop.run_in_executor(
+            None, partial(urllib.request.urlopen, req, timeout=HTTP_TIMEOUT))
+
+        if response.status == 200:
+            data = json.loads(response.read().decode())
+            for match in data.get('matches', []):
+                for host in match.get('hostnames', []):
+                    host = host.strip().lower()
+                    if host.endswith(domain.lower()):
+                        subdomains.add(host)
+        logger.info(f"[+] Shodan discovered {len(subdomains)} subdomains.")
+    except Exception as e:
+        logger.warning(f"[-] Shodan error: {e}")
+
+    return "shodan", subdomains
+
+
+async def fetch_censys(domain: str, api_key: str = None) -> Tuple[str, Set[str]]:
+    """
+    Query Censys Search API v2 (single bearer-token key - the older v1 API
+    needed an ID+secret pair, v2 only needs one key) for certificate names
+    under this domain, and skip if no API key.
+    """
+    subdomains = set()
+    if not api_key:
+        logger.info("[-] Skipped Censys (No API Key provided).")
+        return "censys", subdomains
+
+    query = urllib.parse.quote(f"names: {domain}")
+    url = f"https://search.censys.io/api/v2/hosts/search?q={query}&per_page=50"
+    logger.info("[*] Querying Censys...")
+    try:
+        loop = asyncio.get_event_loop()
+        req = urllib.request.Request(url, headers={'Authorization': f'Bearer {api_key}'})
+        response = await loop.run_in_executor(
+            None, partial(urllib.request.urlopen, req, timeout=HTTP_TIMEOUT))
+
+        if response.status == 200:
+            data = json.loads(response.read().decode())
+            for hit in data.get('result', {}).get('hits', []):
+                for name in hit.get('names', []):
+                    name = name.strip().lower().lstrip('*.')
+                    if name.endswith(domain.lower()):
+                        subdomains.add(name)
+        logger.info(f"[+] Censys discovered {len(subdomains)} subdomains.")
+    except Exception as e:
+        logger.warning(f"[-] Censys error: {e}")
+
+    return "censys", subdomains
