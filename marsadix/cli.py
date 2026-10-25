@@ -37,6 +37,8 @@ from . import db
 from .core.banner import print_banner
 from .core.config import SCAN_MODES, Config, ConfigError, load_config
 from .core.loader import load_callable
+from marsadix.recon.ct_monitor import monitor_ct_logs
+import asyncio
 from .core.log import setup_logging
 from .core.pipeline import run_scan
 from .core.runner import httpx_is_projectdiscovery, tool_status

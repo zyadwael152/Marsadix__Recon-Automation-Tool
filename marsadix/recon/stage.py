@@ -12,7 +12,7 @@ from .bruteforce import bruteforce_subdomains
 from .webprobe import probe_web
 from .revdns import reverse_dns_lookup          # R15
 from .vhost import discover_vhosts              # R16
-from .cpe_map import generate_cpe               # 🆕 R13 Import
+from .cpe_map import generate_cpe               # R13
 from .. import db
 from ..models import Asset, DiscoverySource, Service, Technology
 
@@ -106,8 +106,9 @@ def run(ctx, *args, **kwargs) -> dict:
 
     logger.info(f"=== Starting Recon stage for target: {target} ===")
 
-    # 1. Discover subdomains (R1-R3)
-    raw_results = discover_subdomains(target, api_keys)
+    # 1. Discover subdomains (R1-R3 & R12 Recursion) 🆕
+    max_depth = getattr(cfg, "max_depth", 1) # Default depth is 1
+    raw_results = discover_subdomains(target, api_keys, max_depth=max_depth)
 
     # 2. R5 + R6: Permutations and Bruteforce
     if allows_std:
@@ -164,7 +165,7 @@ def run(ctx, *args, **kwargs) -> dict:
         for host, info in active_results.items():
             db.save_asset_sources_many(ctx.conn, scan_id, host, info["sources"])
 
-        # 🆕 R13: Apply CPE Mapping to detected technologies
+        # R13: Apply CPE Mapping to detected technologies
         techs = [
             _make(Technology, scan_id=scan_id, host=host, name=name, version=version,
                   cpe=generate_cpe(name, version), 
