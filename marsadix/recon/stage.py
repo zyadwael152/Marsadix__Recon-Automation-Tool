@@ -10,8 +10,9 @@ from .portscan import run_naabu, run_nmap
 from .permutation import generate_permutations
 from .bruteforce import bruteforce_subdomains
 from .webprobe import probe_web
-from .revdns import reverse_dns_lookup         
-from .vhost import discover_vhosts             
+from .revdns import reverse_dns_lookup          # R15
+from .vhost import discover_vhosts              # R16
+from .cpe_map import generate_cpe               # 🆕 R13 Import
 from .. import db
 from ..models import Asset, DiscoverySource, Service, Technology
 
@@ -133,13 +134,12 @@ def run(ctx, *args, **kwargs) -> dict:
         unique_ips = {info["ip"] for info in active_results.values() if info.get("ip")}
         cdn_asn_info = asyncio.run(lookup_cdn_asn(unique_ips))
 
-        # 🆕 5. R15: Reverse DNS on discovered IPs
+        # 5. R15: Reverse DNS on discovered IPs
         ptr_hosts = asyncio.run(reverse_dns_lookup(list(unique_ips), dns_rate))
         for host in ptr_hosts:
             if host_ok(host) and host not in active_results:
-                # Add PTR findings to our active results
                 active_results[host] = {"sources": ["ptr"], "ip": None, "ips": [], "cname": []}
-                confidence_scores[host] = 50 # Default confidence for PTR
+                confidence_scores[host] = 50 
 
         assets = []
         for host, info in active_results.items():
@@ -164,8 +164,10 @@ def run(ctx, *args, **kwargs) -> dict:
         for host, info in active_results.items():
             db.save_asset_sources_many(ctx.conn, scan_id, host, info["sources"])
 
+        # 🆕 R13: Apply CPE Mapping to detected technologies
         techs = [
             _make(Technology, scan_id=scan_id, host=host, name=name, version=version,
+                  cpe=generate_cpe(name, version), 
                   url=web.get("url"), source="httpx")
             for host, web in web_info.items() for name, version in web["tech"]
         ]
@@ -183,12 +185,10 @@ def run(ctx, *args, **kwargs) -> dict:
                 and not cdn_asn_info.get(info["ip"], {}).get("is_cdn", False)
             })
 
-            # 🆕 R16: VHost Discovery on non-CDN IPs
+            # R16: VHost Discovery on non-CDN IPs
             if wordlist:
                 for ip in non_cdn_ips:
-                    # Run VHost fuzzing asynchronously
                     vhosts = asyncio.run(discover_vhosts(ip, target, wordlist, rate_limit))
-                    # You could save vhosts to the database here if needed!
             
             # Port Scanning
             host_ports = asyncio.run(run_naabu(non_cdn_ips, rate_limit))
