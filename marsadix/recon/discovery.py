@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 import urllib.request
 from functools import partial
 from typing import Set, List, Dict, Tuple
@@ -8,6 +9,9 @@ from .api_sources import HTTP_TIMEOUT, fetch_virustotal, fetch_alienvault, fetch
 from .merger import merge_and_track
 
 logger = logging.getLogger(__name__)
+
+# فلتر لمنع النطاقات الوهمية والعشوائية الناتجة عن شهادات الـ CT Logs (مثل a258179654.example.com)
+_RANDOM_SUB_RE = re.compile(r".*([0-9]{5,}|[a-z0-9]{32,})", re.IGNORECASE)
 
 async def run_cli_tool(tool_name: str, command: List[str], timeout: int = 120) -> Tuple[str, Set[str]]:
     subdomains = set()
@@ -40,7 +44,6 @@ async def run_cli_tool(tool_name: str, command: List[str], timeout: int = 120) -
 
 async def run_chaos(domain: str, api_key: str = None) -> Tuple[str, Set[str]]:
     if not api_key:
-        logger.info("[-] Skipped chaos (No API Key provided).")
         return "chaos", set()
     return await run_cli_tool("chaos", ["chaos", "-d", domain, "-key", api_key, "-silent"])
 
@@ -60,16 +63,16 @@ async def fetch_crtsh(domain: str) -> Tuple[str, Set[str]]:
                 name_value = entry.get('name_value', '').lower()
                 for sub in name_value.split('\n'):
                     sub = sub.strip()
-                    if sub and not sub.startswith('*'):
+                    # استبعاد الـ Wildcards والدومينات العشوائية الضخمة
+                    if sub and not sub.startswith('*') and not _RANDOM_SUB_RE.match(sub):
                         subdomains.add(sub)
-        logger.info(f"[+] crt.sh discovered {len(subdomains)} subdomains.")
+        logger.info(f"[+] crt.sh discovered {len(subdomains)} clean subdomains.")
     except Exception as e:
         logger.warning(f"[-] Skipped crt.sh due to error: {e}")
         
     return "crt.sh", subdomains
 
 async def _async_discover_single(domain: str, api_keys: dict) -> Dict[str, List[str]]:
-    """Runs all discovery tools on a SINGLE domain."""
     vt_key = api_keys.get("virustotal")
     chaos_key = api_keys.get("chaos")
     otx_key = api_keys.get("alienvault")
@@ -79,7 +82,7 @@ async def _async_discover_single(domain: str, api_keys: dict) -> Dict[str, List[
     tasks = [
         run_cli_tool("subfinder", ["subfinder", "-d", domain, "-silent"]),
         run_cli_tool("assetfinder", ["assetfinder", "--subs-only", domain]),
-        run_cli_tool("amass", ["amass", "enum", "-passive", "-d", domain, "-silent"], timeout=180),
+        run_cli_tool("amass", ["amass", "enum", "-passive", "-d", domain, "-silent"], timeout=120),
         run_cli_tool("findomain", ["findomain", "-t", domain, "-q"]),
         run_chaos(domain, chaos_key),
         fetch_crtsh(domain),
@@ -93,7 +96,6 @@ async def _async_discover_single(domain: str, api_keys: dict) -> Dict[str, List[
     return merge_and_track(tool_outputs)
 
 async def _async_discover_recursive(domain: str, api_keys: dict, max_depth: int) -> Dict[str, List[str]]:
-    """Handles Recursion (R12): Re-scans discovered subdomains up to max_depth."""
     master_results = {}
     targets_to_scan = {domain}
     scanned_targets = set()
@@ -104,14 +106,17 @@ async def _async_discover_recursive(domain: str, api_keys: dict, max_depth: int)
             
         logger.info(f"[*] === Starting Discovery Depth {depth}/{max_depth} for {len(targets_to_scan)} target(s) ===")
         
-        # تشغيل الفحص على كل النطاقات المكتشفة في نفس الوقت
+        # حماية إضافية: لو عدد الأهداف تجاوز 100 في العمق التاني، نكتفي بهم لمنع الـ Explosion
+        if len(targets_to_scan) > 100:
+            logger.warning(f"[-] Target list exceeded 100 items at depth {depth}. Limiting recursion batch to top 100.")
+            targets_to_scan = set(list(targets_to_scan)[:100])
+
         tasks = [_async_discover_single(t, api_keys) for t in targets_to_scan]
         batch_results = await asyncio.gather(*tasks)
         
         scanned_targets.update(targets_to_scan)
         next_targets = set()
         
-        # دمج النتائج وتجهيز الجولة اللي بعدها
         for result_dict in batch_results:
             for sub, sources in result_dict.items():
                 if sub not in master_results:
@@ -120,9 +125,11 @@ async def _async_discover_recursive(domain: str, api_keys: dict, max_depth: int)
                     if src not in master_results[sub]:
                         master_results[sub].append(src)
                         
-                # لو النطاق ده جديد ومفحصناهوش قبل كده، ضيفه للجولة الجاية
-                if sub not in scanned_targets and sub.endswith(domain):
-                    next_targets.add(sub)
+                # اختيار النطاقات الحقيقية فقط للعمق اللي بعده (تجنب العشوائيات)
+                if sub not in scanned_targets and sub.endswith(domain) and not _RANDOM_SUB_RE.match(sub):
+                    # نأخذ فقط الدومينات اللي مقطعها مش أكتر من 4 درجات (مثل a.b.c.example.com) لتجنب الـ Deep nesting الوهمي
+                    if sub.count('.') <= domain.count('.') + 3:
+                        next_targets.add(sub)
                     
         targets_to_scan = next_targets
         
