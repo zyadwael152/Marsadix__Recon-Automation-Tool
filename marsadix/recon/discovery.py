@@ -84,7 +84,8 @@ async def _async_discover_single(domain: str, api_keys: dict) -> Dict[str, List[
     tasks = [
         run_cli_tool("subfinder", ["subfinder", "-d", domain, "-silent"]),
         run_cli_tool("assetfinder", ["assetfinder", "--subs-only", domain]),
-        run_cli_tool("amass", ["amass", "enum", "-passive", "-d", domain, "-silent"], timeout=120),
+        # تم رفع الـ timeout هنا إلى 300 ثانية (5 دقائق) لمنع تايم آوت Amass
+        run_cli_tool("amass", ["amass", "enum", "-passive", "-d", domain, "-silent"], timeout=300),
         run_cli_tool("findomain", ["findomain", "-t", domain, "-q"]),
         run_chaos(domain, chaos_key),
         fetch_crtsh(domain),
