@@ -3,21 +3,22 @@ Marsadix command line.
 
     marsadix scan example.com --scope scope.txt --mode passive
     marsadix monitor [--dry-run]
+    marsadix ct-monitor example.com       # 🆕 R14: Real-time CT Log monitoring
     marsadix diff example.com
     marsadix report example.com --format html
-    marsadix graph example.com           # Knowledge Graph summary
-    marsadix doctor                      # which tools are installed?
+    marsadix graph example.com             # Knowledge Graph summary
+    marsadix doctor                        # which tools are installed?
     marsadix scope scope.txt dev.example.com 8.8.8.8
 
 Commands whose module isn't written yet print "not implemented yet" (exit 3).
 When you write your module, expose EXACTLY this function and the command works:
 
-  monitor  ->  marsadix/monitor/runner.py : run(conn, config, dry_run=False, since=None)
-  diff     ->  marsadix/core/diff.py      : run_diff(conn, target, old_id=None, new_id=None)
-  snapshots ->  marsadix/core/diff.py     : run_snapshots(conn, target)
-  report   ->  marsadix/reports/generate.py : generate_report(conn, target, fmt, out_dir, scan_id=None)
-  graph    ->  marsadix/core/graph.py     : run_graph(conn, target, scan_id=None)
-  scan     ->  stages, see core/pipeline.py
+  monitor   ->  marsadix/monitor/runner.py : run(conn, config, dry_run=False, since=None)
+  diff      ->  marsadix/core/diff.py      : run_diff(conn, target, old_id=None, new_id=None)
+  snapshots ->  marsadix/core/diff.py      : run_snapshots(conn, target)
+  report    ->  marsadix/reports/generate.py : generate_report(conn, target, fmt, out_dir, scan_id=None)
+  graph     ->  marsadix/core/graph.py     : run_graph(conn, target, scan_id=None)
+  scan      ->  stages, see core/pipeline.py
 
 scan --mode (C15): passive (default, no contact with the target) | standard
 (+ resolve/probe/ports) | full (+ active web checks, nuclei, injection
@@ -29,7 +30,9 @@ given, and it requires an authorized scope.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
+import os
 import sys
 from typing import Optional, Sequence
 
@@ -37,12 +40,11 @@ from . import db
 from .core.banner import print_banner
 from .core.config import SCAN_MODES, Config, ConfigError, load_config
 from .core.loader import load_callable
-from marsadix.recon.ct_monitor import monitor_ct_logs
-import asyncio
 from .core.log import setup_logging
 from .core.pipeline import run_scan
 from .core.runner import httpx_is_projectdiscovery, tool_status
 from .core.scope import Scope, ScopeError, normalize_host
+from marsadix.recon.ct_monitor import monitor_ct_logs
 
 log = logging.getLogger("marsadix.cli")
 EXIT_NOT_IMPLEMENTED = 3
@@ -64,13 +66,17 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--depth", type=int, help="recursion depth limit")
     s.add_argument("--rate", type=int, help="requests per second")
     s.add_argument("--mode", choices=list(SCAN_MODES), default=None,
-                    help="passive (default) | standard | full")
+                   help="passive (default) | standard | full")
     s.add_argument("--allow-injection", action="store_true",
-                    help="explicit opt-in for injection-style checks (XSS/SQLi/SSTI probes)")
+                   help="explicit opt-in for injection-style checks (XSS/SQLi/SSTI probes)")
 
     m = sub.add_parser("monitor", help="match new CVEs against stored technologies")
     m.add_argument("--dry-run", action="store_true", help="show matches, send nothing")
     m.add_argument("--since", metavar="ISO_DATE", help="override last sync time")
+
+    # 🆕 R14: CT Log stream monitoring parser
+    ct = sub.add_parser("ct-monitor", help="continuously monitor CT logs for new subdomains in real-time")
+    ct.add_argument("target", help="target domain to monitor, e.g. hackerone.com")
 
     d = sub.add_parser("diff", help="compare the last two scans of a target")
     d.add_argument("target")
@@ -108,12 +114,10 @@ def cmd_scan(a, cfg: Config) -> int:
     scope = Scope.from_file(a.scope) if a.scope else None
     if scope is None and (a.mode or cfg.scan_mode) == "passive":
         log.warning("no --scope given: using %s and *.%s", target, target)
-    # (standard/full without --scope: run_scan refuses with a ScopeError, which
-    #  main() prints as "error: ..." -- no traffic is sent and no scan is created)
 
     scan, results = run_scan(target, cfg, scope=scope, scope_file=a.scope, max_depth=a.depth,
-                              rate_limit=a.rate, mode=a.mode,
-                              allow_injection=(True if a.allow_injection else None))
+                             rate_limit=a.rate, mode=a.mode,
+                             allow_injection=(True if a.allow_injection else None))
     print(f"\nScan #{scan.id} of {scan.target}: {scan.status.value}"
           f"{' (baseline)' if scan.is_baseline else ''} [mode={scan.mode.value}]")
     for r in results:
@@ -142,6 +146,19 @@ def cmd_monitor(a, cfg: Config) -> int:
         return _optional("marsadix.monitor.runner:run", "monitor")
     return _optional("marsadix.monitor.runner:run", "monitor", conn=_open_db(cfg),
                      config=cfg, dry_run=a.dry_run, since=a.since)
+
+
+# 🆕 R14: Command implementation for CT stream monitoring
+def cmd_ct_monitor(a, cfg: Config) -> int:
+    target = normalize_host(a.target) or a.target
+    out_file = f"outputs/{target}_ct_assets.txt"
+    os.makedirs("outputs", exist_ok=True)
+    
+    try:
+        asyncio.run(monitor_ct_logs(target, output_file=out_file))
+    except KeyboardInterrupt:
+        print("\ninterrupted", file=sys.stderr)
+    return 0
 
 
 def cmd_diff(a, cfg: Config) -> int:
@@ -205,9 +222,9 @@ def cmd_scope(a, cfg: Config) -> int:
     return 0
 
 
-COMMANDS = {"scan": cmd_scan, "monitor": cmd_monitor, "diff": cmd_diff,
-            "snapshots": cmd_snapshots, "report": cmd_report, "graph": cmd_graph,
-            "doctor": cmd_doctor, "scope": cmd_scope}
+COMMANDS = {"scan": cmd_scan, "monitor": cmd_monitor, "ct-monitor": cmd_ct_monitor,
+            "diff": cmd_diff, "snapshots": cmd_snapshots, "report": cmd_report,
+            "graph": cmd_graph, "doctor": cmd_doctor, "scope": cmd_scope}
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
