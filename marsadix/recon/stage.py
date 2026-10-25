@@ -10,8 +10,8 @@ from .portscan import run_naabu, run_nmap
 from .permutation import generate_permutations
 from .bruteforce import bruteforce_subdomains
 from .webprobe import probe_web
-from .revdns import reverse_dns_lookup          # 🆕 R15 Import
-from .vhost import discover_vhosts              # 🆕 R16 Import
+from .revdns import reverse_dns_lookup         
+from .vhost import discover_vhosts             
 from .. import db
 from ..models import Asset, DiscoverySource, Service, Technology
 
