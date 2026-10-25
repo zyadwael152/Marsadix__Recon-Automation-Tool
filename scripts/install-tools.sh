@@ -49,7 +49,6 @@ $PKG_UPDATE
 $PKG_INSTALL curl wget git unzip file python3 python3-venv python3-pip || log_warn "Some base packages may have failed to install"
 
 # 3. Go: make sure a recent-enough version is present.
-#    Distro packages (apt's golang-go) are often too old for modern `go install pkg@latest`.
 MIN_GO_MINOR=21
 GO_TARBALL_VERSION="1.23.0"
 
@@ -65,7 +64,7 @@ need_fresh_go() {
 }
 
 if need_fresh_go; then
-    log_info "Installing Golang ${GO_TARBALL_VERSION} from go.dev (distro package is too old or missing)..."
+    log_info "Installing Golang ${GO_TARBALL_VERSION} from go.dev..."
     ARCH=$(uname -m)
     case "$ARCH" in
         x86_64) GOARCH="amd64" ;;
@@ -92,19 +91,18 @@ export GOPATH="$REAL_HOME/go"
 export PATH=$PATH:$GOPATH/bin
 
 if ! command -v go &>/dev/null; then
-    log_err "Go installation failed - aborting, Go-based tools cannot be installed."
+    log_err "Go installation failed - aborting."
     exit 1
 fi
 
-# 4. Persist PATH for the real (non-root) user, not just this shell
+# 4. Persist PATH for the real (non-root) user
 for RC in "$REAL_HOME/.bashrc" "$REAL_HOME/.zshrc"; do
     [ -f "$RC" ] || continue
     grep -qF '/usr/local/go/bin' "$RC" 2>/dev/null || \
         echo 'export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin' >> "$RC"
 done
 
-# 5. Install each Go-based tool and verify it actually landed, instead of
-#    hiding failures behind `cp ... 2>/dev/null`.
+# 5. Install each Go-based tool
 install_go_tool() {
     local name="$1" pkg="$2" logfile="/tmp/marsadix_${1}.log"
     log_info "Installing $name..."
@@ -129,6 +127,8 @@ install_go_tool nuclei      github.com/projectdiscovery/nuclei/v3/cmd/nuclei
 install_go_tool gau         github.com/lc/gau/v2/cmd/gau
 install_go_tool ffuf        github.com/ffuf/ffuf/v2
 install_go_tool alterx      github.com/projectdiscovery/alterx/cmd/alterx
+install_go_tool massdns     github.com/blechschmidt/massdns/bin/massdns
+install_go_tool puredns     github.com/d3mondev/puredns/v2/cmd/puredns
 
 # 6. Amass via the system package manager
 log_info "Installing Amass..."
@@ -136,30 +136,22 @@ if $PKG_INSTALL amass &>/tmp/marsadix_amass.log && command -v amass &>/dev/null;
     log_ok "amass installed."
 else
     FAILED+=("amass")
-    log_err "amass failed via package manager (see /tmp/marsadix_amass.log)."
-    log_warn "Fallback: go install -v github.com/owasp-amass/amass/v4/...@master"
+    log_err "amass failed via package manager."
 fi
 
-# 7. Findomain - current releases ship a .zip archive (not a raw binary),
-#    so download it, verify it's actually a zip, then unzip - instead of
-#    moving the downloaded file straight into /usr/local/bin and trusting
-#    it blindly (a failed download silently returns an HTML/JSON error
-#    page, which `mv`-ing directly turns into a broken "ASCII text" binary).
+# 7. Findomain
 log_info "Installing Findomain..."
 if ! command -v findomain &>/dev/null; then
     ARCH=$(uname -m)
     case "$ARCH" in
         x86_64) FD_ASSET="findomain-linux.zip" ;;
         aarch64|arm64) FD_ASSET="findomain-aarch64.zip" ;;
-        armv7l) FD_ASSET="findomain-armv7.zip" ;;
-        i386|i686) FD_ASSET="findomain-linux-i386.zip" ;;
         *) FD_ASSET="" ;;
     esac
     FD_OK=0
     if [ -n "$FD_ASSET" ] && curl -fsSL -o /tmp/findomain.zip \
         "https://github.com/Findomain/Findomain/releases/latest/download/${FD_ASSET}"; then
         if file /tmp/findomain.zip | grep -qi "Zip archive"; then
-            rm -rf /tmp/findomain_extract
             mkdir -p /tmp/findomain_extract
             if unzip -q /tmp/findomain.zip -d /tmp/findomain_extract && \
                [ -x /tmp/findomain_extract/findomain -o -f /tmp/findomain_extract/findomain ]; then
@@ -168,26 +160,18 @@ if ! command -v findomain &>/dev/null; then
                 FD_OK=1
             fi
             rm -rf /tmp/findomain_extract
-        else
-            log_err "Downloaded findomain asset is not a zip - GitHub asset naming may have changed again."
         fi
         rm -f /tmp/findomain.zip
     fi
-    if [ "$FD_OK" -eq 1 ]; then
-        log_ok "findomain installed."
-    else
-        FAILED+=("findomain")
-        log_err "findomain download/extract failed for architecture ($ARCH)."
-    fi
+    [ "$FD_OK" -eq 1 ] && log_ok "findomain installed." || { FAILED+=("findomain"); log_err "findomain failed."; }
 else
     log_info "findomain is already installed."
 fi
 
-# 8. Final report - verify every tool actually resolves on PATH,
-#    instead of unconditionally printing "installed successfully".
+# 8. Final report
 echo ""
 echo -e "${BLUE}=== Installation report ===${RESET}"
-for t in subfinder assetfinder chaos httpx katana dnsx naabu nuclei gau ffuf alterx amass findomain; do
+for t in subfinder assetfinder chaos httpx katana dnsx naabu nuclei gau ffuf alterx massdns puredns amass findomain; do
     if command -v "$t" &>/dev/null; then
         echo -e "  ${GREEN}[OK]${RESET}    $t"
     else
@@ -199,7 +183,7 @@ echo ""
 if [ "${#FAILED[@]}" -eq 0 ]; then
     log_ok "All external tools installed successfully!"
 else
-    log_warn "Some tools failed: ${FAILED[*]}. Check the logs in /tmp/marsadix_*.log"
+    log_warn "Some tools failed: ${FAILED[*]}. Check logs in /tmp/marsadix_*.log"
 fi
 
 log_info "Open a NEW terminal (or run: source ${REAL_HOME}/.bashrc) so PATH changes take effect."
