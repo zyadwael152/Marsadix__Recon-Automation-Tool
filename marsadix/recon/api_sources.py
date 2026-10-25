@@ -59,6 +59,10 @@ async def fetch_alienvault(domain: str, api_key: str = None) -> Tuple[str, Set[s
         loop = asyncio.get_event_loop()
         headers = {'X-OTX-API-KEY': api_key} if api_key else {}
         req = urllib.request.Request(url, headers=headers)
+        
+        # إضافة استراحة بسيطة لتجنب الـ Rate Limit والحظر السريع (429)
+        await asyncio.sleep(1)
+        
         response = await loop.run_in_executor(
             None, partial(urllib.request.urlopen, req, timeout=HTTP_TIMEOUT))
 
@@ -69,6 +73,11 @@ async def fetch_alienvault(domain: str, api_key: str = None) -> Tuple[str, Set[s
                 if sub:
                     subdomains.add(sub)
         logger.info(f"[+] AlienVault discovered {len(subdomains)} subdomains.")
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            logger.warning("[-] AlienVault rate-limited (HTTP 429). Skipped gracefully.")
+        else:
+            logger.warning(f"[-] AlienVault error: HTTP Error {e.code}")
     except Exception as e:
         logger.warning(f"[-] AlienVault error: {e}")
 
