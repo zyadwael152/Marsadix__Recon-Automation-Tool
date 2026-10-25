@@ -5,8 +5,9 @@ from .resolver import filter_active_subdomains
 from .coverage import log_missing_asset_hunter
 from .confidence import score_hosts
 from .cdn_asn import lookup_cdn_asn
+from .portscan import run_naabu, run_nmap
 from .. import db
-from ..models import Asset, DiscoverySource
+from ..models import Asset, DiscoverySource, Service
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +104,42 @@ def run(ctx, *args, **kwargs) -> dict:
 
         for host, info in active_results.items():
             db.save_asset_sources_many(ctx.conn, scan_id, host, info["sources"])
+
+        # R10 + R11: port scan + service/version/CPE. Both send real traffic
+        # to the target, so only run them when the scan mode allows it -
+        # passive scans skip this entirely, same as the R4 HTTP check.
+        allows = getattr(ctx, "allows", None)
+        if callable(allows) and allows("standard"):
+            non_cdn_ips = sorted({
+                info["ip"] for info in active_results.values()
+                if info.get("ip") and not cdn_asn_info.get(info["ip"], {}).get("is_cdn", False)
+            })
+            rate_limit = getattr(getattr(ctx, "config", None), "rate_limit", None)
+
+            host_ports = asyncio.run(run_naabu(non_cdn_ips, rate_limit))
+            nmap_results = asyncio.run(run_nmap(host_ports))
+
+            services = []
+            for ip, ports in host_ports.items():
+                nmap_by_port = {e["port"]: e for e in nmap_results.get(ip, [])}
+                for port in ports:
+                    svc = nmap_by_port.get(port, {})
+                    services.append(Service(
+                        scan_id=scan_id,
+                        host=ip,
+                        ip=ip,
+                        port=port,
+                        name=svc.get("service"),
+                        product=svc.get("product"),
+                        version=svc.get("version"),
+                        cpe=svc.get("cpe"),
+                    ))
+
+            if services:
+                saved_services = db.save_many(ctx.conn, "services", services)
+                logger.info(f"[+] Saved {saved_services} service(s) for scan #{scan_id}")
+        else:
+            logger.info("[-] Skipping port scan / nmap (passive mode - no traffic to target).")
 
         # R17: Missing Asset Hunter - per-source coverage + single-source hosts
         log_missing_asset_hunter(ctx.conn, scan_id)
