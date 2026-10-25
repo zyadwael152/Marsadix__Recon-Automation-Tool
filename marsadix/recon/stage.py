@@ -3,6 +3,7 @@ import asyncio
 from .discovery import discover_subdomains
 from .resolver import filter_active_subdomains
 from .coverage import log_missing_asset_hunter
+from .confidence import score_hosts
 from .. import db
 from ..models import Asset, DiscoverySource
 
@@ -63,9 +64,13 @@ def run(ctx, *args, **kwargs) -> dict:
         scan_id = ctx.scan.id
         in_scope = getattr(ctx, "in_scope", None)
 
+        # R4: real confidence score (sources + resolved + HTTP liveness when
+        # the scan mode allows contacting the target) instead of a sources-only guess.
+        sources_by_host = {host: info["sources"] for host, info in active_results.items()}
+        confidence_scores = asyncio.run(score_hosts(ctx, sources_by_host))
+
         assets = []
         for host, info in active_results.items():
-            sources = info["sources"]
             host_in_scope = in_scope(host) if callable(in_scope) else True
             assets.append(Asset(
                 scan_id=scan_id,
@@ -73,7 +78,7 @@ def run(ctx, *args, **kwargs) -> dict:
                 ip=info.get("ip"),
                 in_scope=host_in_scope,
                 source=DiscoverySource.PASSIVE,
-                confidence_score=min(100, len(sources) * 20),
+                confidence_score=confidence_scores.get(host, 0),
             ))
 
         saved = db.save_many(ctx.conn, "assets", assets)
