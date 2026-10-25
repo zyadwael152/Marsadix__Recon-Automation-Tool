@@ -10,7 +10,7 @@
 
   naabu may ask for Npcap on Windows (https://npcap.com).
 
-  assetfinder / amass / chaos are Go tools installed via `go install`
+  assetfinder / amass / chaos / alterx / massdns / puredns are Go tools installed via `go install`
   (needs Go: winget install GoLang.Go) instead of guessing a release
   filename. findomain is Rust, not Go, so it's downloaded directly from
   its GitHub release instead.
@@ -111,17 +111,20 @@ foreach ($tool in $tools) {
   }
 }
 
-# --- assetfinder, amass, chaos: Go tools, installed with `go install` so we
+# --- assetfinder, amass, chaos, alterx, massdns, puredns: Go tools, installed with `go install` so we
 #     never have to guess a release-asset filename for them. Needs Go.
 $goTools = @(
   @{ Name = "assetfinder"; Module = "github.com/tomnomnom/assetfinder@latest" },
   @{ Name = "amass";       Module = "github.com/owasp-amass/amass/v4/...@master" },
-  @{ Name = "chaos";       Module = "github.com/projectdiscovery/chaos-client/cmd/chaos@latest" }
+  @{ Name = "chaos";       Module = "github.com/projectdiscovery/chaos-client/cmd/chaos@latest" },
+  @{ Name = "alterx";      Module = "github.com/projectdiscovery/alterx/cmd/alterx@latest" },
+  @{ Name = "massdns";     Module = "github.com/blechschmidt/massdns/bin/massdns@latest" },
+  @{ Name = "puredns";     Module = "github.com/d3mondev/puredns/v2/cmd/puredns@latest" }
 )
 
 $goAvailable = [bool](Get-Command go -ErrorAction SilentlyContinue)
 if (-not $goAvailable) {
-  Write-Host "[go] not found - assetfinder/amass/chaos need it: winget install GoLang.Go" -ForegroundColor Yellow
+  Write-Host "[go] not found - Go-based tools need it: winget install GoLang.Go" -ForegroundColor Yellow
 }
 
 foreach ($gt in $goTools) {
@@ -155,10 +158,6 @@ foreach ($gt in $goTools) {
 }
 
 # --- findomain: not a Go tool (it's Rust), so it can't use `go install`.
-#     Downloaded directly like the main tools above, but its release asset
-#     is named "findomain-windows.zip" (no version/arch in the filename) --
-#     this naming is our best-effort read of their release page; if GitHub
-#     changed it, this block fails cleanly and tells you to grab it by hand.
 $findomainExe = Join-Path $InstallDir "findomain.exe"
 if (Test-Path $findomainExe) {
   Write-Host "[findomain] already there" -ForegroundColor Yellow
@@ -204,8 +203,7 @@ if (-not (Get-Command nmap -ErrorAction SilentlyContinue)) {
   Write-Host "[nmap] already installed" -ForegroundColor Yellow
 }
 
-# PATH is now added by default (opt out with -NoAddToPath), since tools
-# that download fine but never run from any shell defeat the point.
+# PATH is now added by default (opt out with -NoAddToPath)
 if (-not $NoAddToPath) {
   $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
   if (-not $userPath) { $userPath = "" }
