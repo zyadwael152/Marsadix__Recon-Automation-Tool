@@ -4,7 +4,7 @@ import logging
 import urllib.request
 from functools import partial
 from typing import Set, List, Dict, Tuple
-from .api_sources import HTTP_TIMEOUT, fetch_virustotal, fetch_alienvault, fetch_securitytrails, fetch_shodan, fetch_censys
+from .api_sources import HTTP_TIMEOUT, fetch_virustotal, fetch_alienvault, fetch_shodan, fetch_censys
 from .merger import merge_and_track
 
 logger = logging.getLogger(__name__)
@@ -80,7 +80,6 @@ async def _async_discover(domain: str, api_keys: dict = None) -> Dict[str, List[
     vt_key = api_keys.get("virustotal")
     chaos_key = api_keys.get("chaos")
     otx_key = api_keys.get("alienvault")
-    st_key = api_keys.get("securitytrails")
     shodan_key = api_keys.get("shodan")
     censys_key = api_keys.get("censys")
     
@@ -93,7 +92,6 @@ async def _async_discover(domain: str, api_keys: dict = None) -> Dict[str, List[
         fetch_crtsh(domain),
         fetch_alienvault(domain, otx_key),
         fetch_virustotal(domain, vt_key),
-        fetch_securitytrails(domain, st_key),
         fetch_shodan(domain, shodan_key),
         fetch_censys(domain, censys_key)
     ]
