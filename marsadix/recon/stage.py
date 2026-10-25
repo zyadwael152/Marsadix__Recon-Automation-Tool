@@ -4,6 +4,7 @@ from .discovery import discover_subdomains
 from .resolver import filter_active_subdomains
 from .coverage import log_missing_asset_hunter
 from .confidence import score_hosts
+from .cdn_asn import lookup_cdn_asn
 from .. import db
 from ..models import Asset, DiscoverySource
 
@@ -69,16 +70,26 @@ def run(ctx, *args, **kwargs) -> dict:
         sources_by_host = {host: info["sources"] for host, info in active_results.items()}
         confidence_scores = asyncio.run(score_hosts(ctx, sources_by_host))
 
+        # R9: CDN/ASN - one bulk lookup for every unique IP, not one per host
+        unique_ips = {info["ip"] for info in active_results.values() if info.get("ip")}
+        cdn_asn_info = asyncio.run(lookup_cdn_asn(unique_ips))
+
         assets = []
         for host, info in active_results.items():
             host_in_scope = in_scope(host) if callable(in_scope) else True
+            ip = info.get("ip")
+            extra = cdn_asn_info.get(ip, {}) if ip else {}
             assets.append(Asset(
                 scan_id=scan_id,
                 host=host,
-                ip=info.get("ip"),
+                ip=ip,
                 in_scope=host_in_scope,
                 source=DiscoverySource.PASSIVE,
                 confidence_score=confidence_scores.get(host, 0),
+                is_cdn=extra.get("is_cdn", False),
+                cdn_name=extra.get("asn_owner") if extra.get("is_cdn") else None,
+                asn=extra.get("asn"),
+                asn_owner=extra.get("asn_owner"),
             ))
 
         saved = db.save_many(ctx.conn, "assets", assets)
