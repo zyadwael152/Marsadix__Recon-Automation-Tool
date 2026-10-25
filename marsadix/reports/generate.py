@@ -176,6 +176,19 @@ _EDGE_GROUP = {
 # `marsadix graph`.
 MAX_GRAPH_NODES = 400
 
+# The layout canvas grows with the number of nodes: 3 nodes laid out on a
+# 960x620 board were thrown to its corners, hundreds of pixels apart. From about
+# 15 nodes up the canvas is the full 960x620 (so big graphs are laid out exactly
+# as before); below that it shrinks, keeping a roughly constant space per node.
+CANVAS_MAX = (960, 620)
+CANVAS_MIN = (520, 330)
+AREA_PER_NODE = 40000       # px^2 of layout canvas per node
+
+# Label geometry, used to size the SVG so no label is cut off at its edge.
+LABEL_CHAR_PX = 5.9         # approx. width of one character of the 9.5px bold label
+GRAPH_PAD = 24
+GRAPH_MIN_W, GRAPH_MIN_H = 640, 340   # a tiny graph is not blown up to fill the page
+
 
 def _select_visible(nodes: list[dict], edges: list[dict],
                      limit: int = MAX_GRAPH_NODES) -> tuple[list[dict], list[dict], int]:
@@ -196,7 +209,14 @@ def _select_visible(nodes: list[dict], edges: list[dict],
     return keep, kept_edges, len(nodes) - limit
 
 
-def _layout_graph(nodes: list[dict], edges: list[dict],
+def _canvas_size(n_nodes: int) -> tuple[int, int]:
+    area = min(n_nodes * AREA_PER_NODE, CANVAS_MAX[0] * CANVAS_MAX[1])
+    h = math.sqrt(area / 1.55)
+    return (max(CANVAS_MIN[0], min(CANVAS_MAX[0], round(1.55 * h))),
+            max(CANVAS_MIN[1], min(CANVAS_MAX[1], round(h))))
+
+
+def _force_layout(nodes: list[dict], edges: list[dict],
                    width: int = 960, height: int = 620,
                    iterations: Optional[int] = None) -> dict:
     """
@@ -272,6 +292,50 @@ def _layout_graph(nodes: list[dict], edges: list[dict],
     return pos
 
 
+def _layout_graph(nodes: list[dict], edges: list[dict],
+                   width: int = 960, height: int = 620,
+                   iterations: Optional[int] = None,
+                   isolated_cell: tuple[int, int] = (170, 44)) -> dict:
+    """
+    Positions for every node: {node_id: [x, y]}.
+
+    Nodes that have at least one edge go through the force layout. Nodes with
+    NO edges (typically subdomains that never resolved to an IP) have nothing
+    to hold them in place, so a force layout only pushes them to the corners
+    of the canvas. They are instead laid out on a tidy grid, centred under the
+    linked part of the graph (or in the middle when nothing is linked).
+    `isolated_cell` is the grid cell (width, height): wide enough for a label
+    when the isolated nodes are labelled, small when they are plain dots.
+    """
+    if not nodes:
+        return {}
+    ids = {nd["id"] for nd in nodes}
+    safe_edges = [e for e in edges if e["src_id"] in ids and e["dst_id"] in ids]
+    linked_ids = {e["src_id"] for e in safe_edges} | {e["dst_id"] for e in safe_edges}
+    linked = [nd for nd in nodes if nd["id"] in linked_ids]
+    isolated = sorted((nd for nd in nodes if nd["id"] not in linked_ids),
+                      key=lambda nd: (nd["node_type"], nd["label"], nd["id"]))
+
+    pos = _force_layout(linked, safe_edges, width, height, iterations) if linked else {}
+    if not isolated:
+        return pos
+
+    cell_w, cell_h = isolated_cell
+    cols = max(1, min(len(isolated), max(3, int((width - 80) // cell_w))))   # never narrower than 3 per row
+    rows = math.ceil(len(isolated) / cols)
+    if pos:
+        xs = [p[0] for p in pos.values()]
+        centre_x = (min(xs) + max(xs)) / 2
+        top = max(p[1] for p in pos.values()) + 70       # clear gap below the linked part
+    else:
+        centre_x = width / 2
+        top = (height - (rows - 1) * cell_h) / 2
+    left = centre_x - (cols - 1) * cell_w / 2
+    for i, nd in enumerate(isolated):
+        pos[nd["id"]] = [left + (i % cols) * cell_w, top + (i // cols) * cell_h]
+    return pos
+
+
 def _render_graph_svg(graph: dict) -> str:
     nodes, edges = graph.get("nodes", []), graph.get("edges", [])
     if not nodes:
@@ -284,15 +348,26 @@ def _render_graph_svg(graph: dict) -> str:
         f'(findings, CVEs and best-connected nodes first). The full graph is in the JSON '
         f'report and in <code>marsadix graph</code>.</p>') if hidden else ""
 
-    width, height = 960, 620
-    pos = _layout_graph(nodes, edges, width, height)
-
     degree: dict[str, int] = {n["id"]: 0 for n in nodes}
     for e in edges:
         if e["src_id"] in degree:
             degree[e["src_id"]] += 1
         if e["dst_id"] in degree:
             degree[e["dst_id"]] += 1
+
+    # Important nodes get a visible label; a sea of 50 isolated subdomains
+    # with no relationships doesn't need 50 overlapping text labels to be
+    # readable -- hovering any dot still shows its name via <title>.
+    always_label = {"cve", "finding", "asn", "cdn"}
+    show_label_for = {
+        n["id"] for n in nodes
+        if degree[n["id"]] > 0 or n["node_type"] in always_label or len(nodes) <= 15
+    }
+
+    isolated = [n for n in nodes if degree[n["id"]] == 0]
+    width, height = _canvas_size(len(nodes) - len(isolated))
+    cell = (170, 44) if any(n["id"] in show_label_for for n in isolated) else (34, 34)
+    pos = _layout_graph(nodes, edges, width, height, isolated_cell=cell)
 
     lines = []
     for e in edges:
@@ -305,16 +380,12 @@ def _render_graph_svg(graph: dict) -> str:
             f'<line x1="{x1:.0f}" y1="{y1:.0f}" x2="{x2:.0f}" y2="{y2:.0f}" '
             f'class="graph-edge edge-{group}"><title>{_e(e["relation"])}</title></line>')
 
-    # Important nodes get a visible label; a sea of 50 isolated subdomains
-    # with no relationships doesn't need 50 overlapping text labels to be
-    # readable -- hovering any dot still shows its name via <title>.
-    always_label = {"cve", "finding", "asn", "cdn"}
-    show_label_for = {
-        n["id"] for n in nodes
-        if degree[n["id"]] > 0 or n["node_type"] in always_label or len(nodes) <= 15
-    }
-
     circles = []
+    # Bounding box of everything that is drawn, labels included. The labels sit
+    # to the right of their dot, so a node near the right border used to have
+    # its name sliced off by the SVG edge.
+    min_x = min_y = float("inf")
+    max_x = max_y = float("-inf")
     for n in nodes:
         if n["id"] not in pos:
             continue
@@ -322,9 +393,13 @@ def _render_graph_svg(graph: dict) -> str:
         var = _NODE_VARS.get(n["node_type"], "--n-ip")
         r = 6 + min(degree[n["id"]], 8) * 1.4   # busier nodes draw the eye first
         label_svg = ""
+        label_w = 0.0
         if n["id"] in show_label_for:
             label = n["label"][:24] + ("…" if len(n["label"]) > 24 else "")
             label_svg = f'<text x="{r + 4:.0f}" y="4" class="graph-label">{_e(label)}</text>'
+            label_w = 4 + len(label) * LABEL_CHAR_PX + 4        # gap + text + stroke halo
+        min_x, max_x = min(min_x, x - r), max(max_x, x + r + label_w)
+        min_y, max_y = min(min_y, y - max(r, 8)), max(max_y, y + max(r, 8))
         circles.append(f'''
         <g class="graph-node" transform="translate({x:.0f},{y:.0f})">
           <circle r="{r:.0f}" fill="var({var})" class="node-dot">
@@ -333,6 +408,15 @@ def _render_graph_svg(graph: dict) -> str:
           {label_svg}
         </g>''')
 
+    # viewBox = the content plus padding, never smaller than a minimum size,
+    # with the content centred. A 3-node graph is no longer drawn on a huge
+    # empty 960x620 board, and nothing can fall outside the visible area.
+    content_w, content_h = max_x - min_x, max_y - min_y
+    vb_w = max(content_w + 2 * GRAPH_PAD, GRAPH_MIN_W)
+    vb_h = max(content_h + 2 * GRAPH_PAD, GRAPH_MIN_H)
+    vb_x = min_x - (vb_w - content_w) / 2
+    vb_y = min_y - (vb_h - content_h) / 2
+
     legend = "".join(
         f'<span class="legend-item"><i style="background:var({_NODE_VARS.get(t, "--n-ip")})"></i>{_e(t)}</span>'
         for t in sorted({n["node_type"] for n in nodes}))
@@ -340,14 +424,14 @@ def _render_graph_svg(graph: dict) -> str:
     return f'''
     {truncated_note}
     <div class="legend">{legend}</div>
-    <svg viewBox="0 0 {width} {height}" class="graph-svg">
+    <svg viewBox="{vb_x:.0f} {vb_y:.0f} {vb_w:.0f} {vb_h:.0f}" class="graph-svg">
       <defs>
         <radialGradient id="graphBg" cx="50%" cy="35%" r="75%">
           <stop offset="0%" stop-color="var(--graph-bg-near)"/>
           <stop offset="100%" stop-color="var(--graph-bg-far)"/>
         </radialGradient>
       </defs>
-      <rect x="0" y="0" width="{width}" height="{height}" fill="url(#graphBg)" rx="10"/>
+      <rect x="{vb_x:.0f}" y="{vb_y:.0f}" width="{vb_w:.0f}" height="{vb_h:.0f}" fill="url(#graphBg)" rx="10"/>
       {"".join(lines)}
       {"".join(circles)}
     </svg>'''
@@ -502,8 +586,8 @@ body.engagement .engagement-only { display:table-cell; }
 .limitations { background:var(--surface); border:1px solid var(--border);
                border-left:4px solid var(--med); border-radius:10px; padding:16px; }
 .graph-svg { width:100%; height:auto; border:1px solid var(--border); border-radius:10px; }
-.graph-edge { stroke:var(--border); stroke-width:1.1; opacity:.8; }
-.graph-edge.edge-risk { stroke:var(--crit); stroke-width:1.4; opacity:.55; }
+.graph-edge { stroke:var(--muted); stroke-width:1.3; opacity:.6; }   /* was var(--border): ~1.1:1 contrast, i.e. invisible */
+.graph-edge.edge-risk { stroke:var(--crit); stroke-width:1.6; opacity:.7; }
 .graph-node .node-dot { stroke:var(--surface); stroke-width:2; cursor:default;
                          transition:r .15s ease; }
 .graph-node:hover .node-dot { stroke:var(--accent); }
