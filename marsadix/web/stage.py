@@ -33,7 +33,8 @@ from urllib.parse import urlsplit
 
 from .. import db
 from ..core.scope import normalize_host
-from ..models import DiscoverySource, WebItem, WebItemKind
+from ..models import Confidence, DiscoverySource, Technology, WebItem, WebItemKind
+from . import fingerprint
 from .probe import run_httpx, run_katana
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,21 @@ def _endpoint_item(scan_id: int, url: str) -> WebItem:
         source=DiscoverySource.ACTIVE,
         has_params=bool(parts.query),
     )
+
+
+def _technologies(scan_id: int, host: str, record: dict) -> List[Technology]:
+    """Technologies httpx saw on one host: wappalyzer matches + the Server header."""
+    found = fingerprint.merge_technologies(
+        fingerprint.parse_tech(record.get("tech")),
+        fingerprint.parse_server_header(record.get("webserver")))
+    return [Technology(
+        scan_id=scan_id, host=host, name=name, version=version,
+        cpe=fingerprint.cpe_for(name, version), category=fingerprint.category_for(name),
+        source="httpx",
+        # a version read from a header/page is evidence, not proof (backports,
+        # masked banners): LIKELY at best, CONFIRMED only after a safe check
+        confidence=Confidence.LIKELY if version else Confidence.POSSIBLE)
+        for name, version in found]
 
 
 def run(ctx, *args, **kwargs) -> dict:
@@ -101,6 +117,19 @@ def run(ctx, *args, **kwargs) -> dict:
     elif live_urls:
         logger.info("[*] Crawling skipped: katana only runs in --mode full")
 
+    # ---- what probing learned about each host: IP, CDN, technologies + versions
+    host_set = set(hosts)
+    technologies: List[Technology] = []
+    for r in live:
+        host = r.get("input") if r.get("input") in host_set else (normalize_host(r["url"]) or r["url"])
+        db.update_asset_network(ctx.conn, scan_id, host, ip=r.get("ip"),
+                                is_cdn=bool(r.get("cdn")), cdn_name=r.get("cdn_name"))
+        technologies += _technologies(scan_id, host, r)
+    tech_stored = db.save_many(ctx.conn, "technologies", technologies)
+    cdn_hosts = sum(1 for r in live if r.get("cdn"))
+    logger.info("[+] Stored %d technology/version record(s); %d host(s) behind a CDN",
+                tech_stored, cdn_hosts)
+
     # ---- store in the database (UNIQUE(scan_id, url, kind): a re-run adds nothing twice)
     items = [WebItem(scan_id=scan_id, host=normalize_host(r["url"]) or r["url"], url=r["url"],
                      kind=WebItemKind.URL, source=DiscoverySource.ACTIVE,
@@ -118,4 +147,5 @@ def run(ctx, *args, **kwargs) -> dict:
     if endpoints:
         _write_lines(os.path.join(out_dir, f"{ctx.target}_endpoints.txt"), endpoints)
 
-    return {"live_urls": live_urls, "endpoints": endpoints, "stored": stored}
+    return {"live_urls": live_urls, "endpoints": endpoints, "stored": stored,
+            "technologies": tech_stored}

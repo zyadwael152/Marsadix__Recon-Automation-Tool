@@ -551,6 +551,21 @@ def get_technologies(conn, scan_id: Optional[int] = None) -> list[sqlite3.Row]:
         "ON t.host=m.host AND t.name=m.name AND t.scan_id=m.s").fetchall()
 
 
+def update_asset_network(conn, scan_id: int, host: str, ip: Optional[str] = None,
+                         is_cdn: bool = False, cdn_name: Optional[str] = None) -> None:
+    """
+    Record what probing learned about a host: its IP (only if recon did not
+    already resolve one), and whether it sits behind a CDN. CDN info only ever
+    switches ON: a later probe that failed to detect it must not erase it.
+    """
+    conn.execute(
+        "UPDATE assets SET ip = COALESCE(ip, ?), "
+        "is_cdn = CASE WHEN ? THEN 1 ELSE is_cdn END, "
+        "cdn_name = COALESCE(?, cdn_name) WHERE scan_id=? AND host=?",
+        (ip, 1 if is_cdn else 0, cdn_name, scan_id, host))
+    conn.commit()
+
+
 def get_assets(conn, scan_id: int) -> list[sqlite3.Row]:
     return conn.execute("SELECT * FROM assets WHERE scan_id=?", (scan_id,)).fetchall()
 

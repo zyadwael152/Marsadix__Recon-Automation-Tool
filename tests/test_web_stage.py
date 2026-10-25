@@ -244,3 +244,88 @@ def test_stored_items_appear_in_the_json_report(conn, tmp_path, calls):
     generate_report(conn, "example.com", out_dir=str(out))
     data = json.loads(next(out.glob("*_report.json")).read_text())
     assert any(w["url"] == "https://www.example.com/login" for w in data["web_items"])
+
+
+# ------------------------------------------- technologies, versions, CDN and IP from httpx
+
+@pytest.fixture
+def rich(monkeypatch):
+    """httpx answers with realistic records (technologies, Server header, IP, CDN)."""
+    async def fake_httpx(hosts, rate_limit=None):
+        return [
+            {"url": "https://www.example.com", "input": "www.example.com", "status_code": 200, "ip": "203.0.113.5",
+             "webserver": "nginx/1.18.0 (Ubuntu)", "tech": ["Nginx:1.18.0", "PHP:8.1.2", "HSTS", "jQuery:3.6.0"],
+             "cdn": False, "cdn_name": None},
+            {"url": "https://api.example.com", "input": "api.example.com", "status_code": 200, "ip": "104.21.5.9",
+             "webserver": "cloudflare", "tech": [], "cdn": True, "cdn_name": "cloudflare"},
+        ]
+    monkeypatch.setattr(web_stage, "run_httpx", fake_httpx)
+    monkeypatch.setattr(web_stage, "run_katana", lambda *a, **k: _async([]))
+
+
+async def _async(value):
+    return value
+
+
+def _techs(conn, scan_id):
+    return {(t["host"], t["name"], t["version"]): t for t in db.get_technologies(conn, scan_id)}
+
+
+def test_technologies_and_versions_are_stored(conn, tmp_path, rich):
+    ctx = _ctx(conn, tmp_path, "standard")
+    out = web_stage.run(ctx)
+
+    t = _techs(conn, ctx.scan.id)
+    nginx = t[("www.example.com", "Nginx", "1.18.0")]
+    assert nginx["category"] == "web-server" and nginx["source"] == "httpx" and nginx["confidence"] == "likely"
+    assert nginx["cpe"] == "cpe:2.3:a:f5:nginx:1.18.0:*:*:*:*:*:*:*"
+    assert t[("www.example.com", "PHP", "8.1.2")]["cpe"] == "cpe:2.3:a:php:php:8.1.2:*:*:*:*:*:*:*"
+    assert t[("www.example.com", "jQuery", "3.6.0")]["category"] == "js-library"
+    hsts = t[("www.example.com", "HSTS", "")]                       # no version -> stored, but only "possible"
+    assert hsts["confidence"] == "possible" and hsts["cpe"] is None
+    assert out["technologies"] == len(t)
+
+
+def test_the_server_header_is_not_stored_twice_when_wappalyzer_saw_it_too(conn, tmp_path, rich):
+    ctx = _ctx(conn, tmp_path, "standard")
+    web_stage.run(ctx)
+    nginx_rows = [k for k in _techs(conn, ctx.scan.id) if k[0] == "www.example.com" and k[1].lower() == "nginx"]
+    assert nginx_rows == [("www.example.com", "Nginx", "1.18.0")]
+
+
+def test_cdn_and_ip_are_recorded_on_the_asset(conn, tmp_path, rich):
+    ctx = _ctx(conn, tmp_path, "standard")
+    web_stage.run(ctx)
+
+    assets = {a["host"]: a for a in db.get_assets(conn, ctx.scan.id)}
+    assert assets["api.example.com"]["is_cdn"] == 1 and assets["api.example.com"]["cdn_name"] == "cloudflare"
+    assert assets["api.example.com"]["ip"] == "104.21.5.9"
+    assert assets["www.example.com"]["is_cdn"] == 0 and assets["www.example.com"]["ip"] == "203.0.113.5"
+
+
+def test_an_ip_recon_already_resolved_is_not_overwritten_and_cdn_is_never_switched_off(conn, tmp_path, rich):
+    ctx = _ctx(conn, tmp_path, "standard")
+    conn.execute("UPDATE assets SET ip='198.51.100.7' WHERE host='www.example.com' AND scan_id=?", (ctx.scan.id,))
+    conn.execute("UPDATE assets SET is_cdn=1, cdn_name='akamai' WHERE host='www.example.com' AND scan_id=?", (ctx.scan.id,))
+    conn.commit()
+    web_stage.run(ctx)                                 # httpx says www is NOT behind a CDN this time
+
+    www = next(a for a in db.get_assets(conn, ctx.scan.id) if a["host"] == "www.example.com")
+    assert www["ip"] == "198.51.100.7" and www["is_cdn"] == 1 and www["cdn_name"] == "akamai"
+
+
+def test_passive_mode_stores_no_technologies(conn, tmp_path, rich):
+    ctx = _ctx(conn, tmp_path, "passive")
+    web_stage.run(ctx)
+    assert db.get_technologies(conn, ctx.scan.id) == []
+
+
+def test_technologies_reach_the_knowledge_graph_with_their_versions(conn, tmp_path, rich):
+    from marsadix.core.graph import build_graph
+    ctx = _ctx(conn, tmp_path, "standard")
+    web_stage.run(ctx)
+    build_graph(conn, ctx.scan.id)
+    ids = {n["id"] for n in db.get_graph(conn, ctx.scan.id)["nodes"]}
+    assert "technology:www.example.com:Nginx:1.18.0" in ids
+    assert "cpe:cpe:2.3:a:php:php:8.1.2:*:*:*:*:*:*:*" in ids
+    assert "cdn:cloudflare" in ids

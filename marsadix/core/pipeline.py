@@ -33,6 +33,7 @@ log = logging.getLogger(__name__)
 STAGES = [
     ("recon", "marsadix.recon.stage:run"),
     ("web", "marsadix.web.stage:run"),
+    ("ports", "marsadix.ports.stage:run"),
     ("asm", "marsadix.asm.stage:run"),
     ("track", "marsadix.core.diff:run_stage"),
     ("graph", "marsadix.core.graph:run_stage"),

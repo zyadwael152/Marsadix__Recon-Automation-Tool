@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nmaprun>
+<?xml-stylesheet href="file:///usr/bin/../share/nmap/nmap.xsl" type="text/xsl"?>
+<!-- Nmap 7.94SVN scan initiated Sun Oct 25 11:16:05 2026 as: nmap -sV -&#45;version-intensity 5 -Pn -n -p 80,8080,9 -&#45;host-timeout 90s -oX - 127.0.0.1 -->
+<nmaprun scanner="nmap" args="nmap -sV -&#45;version-intensity 5 -Pn -n -p 80,8080,9 -&#45;host-timeout 90s -oX - 127.0.0.1" start="1792926965" startstr="Sun Oct 25 11:16:05 2026" version="7.94SVN" xmloutputversion="1.05">
+<scaninfo type="syn" protocol="tcp" numservices="3" services="9,80,8080"/>
+<verbose level="0"/>
+<debugging level="0"/>
+<host starttime="1792926966" endtime="1792926972"><status state="up" reason="user-set" reason_ttl="0"/>
+<address addr="127.0.0.1" addrtype="ipv4"/>
+<hostnames>
+</hostnames>
+<ports><port protocol="tcp" portid="9"><state state="closed" reason="reset" reason_ttl="64"/><service name="discard" method="table" conf="3"/></port>
+<port protocol="tcp" portid="80"><state state="open" reason="syn-ack" reason_ttl="64"/><service name="http" product="SimpleHTTPServer" version="0.6" extrainfo="Python 3.12.3" method="probed" conf="10"><cpe>cpe:/a:python:simplehttpserver:0.6</cpe></service></port>
+<port protocol="tcp" portid="8080"><state state="open" reason="syn-ack" reason_ttl="64"/><service name="http" product="SimpleHTTPServer" version="0.6" extrainfo="Python 3.12.3" method="probed" conf="10"><cpe>cpe:/a:python:simplehttpserver:0.6</cpe></service></port>
+</ports>
+<times srtt="66" rttvar="2845" to="100000"/>
+</host>
+<runstats><finished time="1792926972" timestr="Sun Oct 25 11:16:12 2026" summary="Nmap done at Sun Oct 25 11:16:12 2026; 1 IP address (1 host up) scanned in 6.28 seconds" elapsed="6.28" exit="success"/><hosts up="1" down="0" total="1"/>
+</runstats>
+</nmaprun>

@@ -28,8 +28,14 @@ def _rate_args(rate_limit: Optional[int]) -> List[str]:
 
 async def run_httpx(domains: List[str], rate_limit: Optional[int] = None) -> List[dict]:
     """
-    Probe hosts with httpx. Returns one record per live web server:
-    {"url": "https://a.example.com", "status_code": 200}  (status_code may be None).
+    Probe hosts with httpx (-td technology detection, -server header; CDN
+    detection is on by default). Returns one record per live web server:
+
+        {"url": "https://a.example.com", "input": "a.example.com", "status_code": 200,
+         "ip": "93.184.216.34", "webserver": "nginx/1.18.0", "tech": ["Nginx:1.18.0", "PHP"],
+         "cdn": False, "cdn_name": None}
+
+    status_code is None when httpx did not report an integer.
     """
     if not domains:
         return []
@@ -41,7 +47,7 @@ async def run_httpx(domains: List[str], rate_limit: Optional[int] = None) -> Lis
 
     try:
         process = await asyncio.create_subprocess_exec(
-            "httpx", "-silent", "-json", *_rate_args(rate_limit),
+            "httpx", "-silent", "-json", "-td", "-server", *_rate_args(rate_limit),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -56,7 +62,17 @@ async def run_httpx(domains: List[str], rate_limit: Optional[int] = None) -> Lis
             if not isinstance(data, dict) or not data.get("url") or data.get("failed"):
                 continue
             status = data.get("status_code")
-            live.append({"url": data["url"], "status_code": status if isinstance(status, int) else None})
+            addresses = data.get("a") if isinstance(data.get("a"), list) else []
+            live.append({
+                "url": data["url"],
+                "input": str(data.get("input") or "").strip().lower() or None,
+                "status_code": status if isinstance(status, int) else None,
+                "ip": data.get("host_ip") or (addresses[0] if addresses else None),
+                "webserver": data.get("webserver") or None,
+                "tech": [str(t) for t in data.get("tech") or []],
+                "cdn": bool(data.get("cdn")),
+                "cdn_name": data.get("cdn_name") or None,
+            })
 
         logger.info("[+] httpx found %d live web servers.", len(live))
     except Exception as e:

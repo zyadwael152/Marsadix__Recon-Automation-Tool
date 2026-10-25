@@ -59,14 +59,25 @@ def test_no_rate_limit_means_no_flag(spawned):
 
 def test_httpx_output_is_parsed_into_records(spawned):
     spawned["out"] = (
-        b'{"url":"https://a.example.com","status_code":200}\n'
-        b'{"url":"http://b.example.com","status_code":"oops"}\n'      # odd status: kept, status None
-        b'{"url":"https://c.example.com","failed":true}\n'           # failed probe: dropped
+        b'{"url":"https://a.example.com","input":"A.example.com","status_code":200,"host_ip":"1.2.3.4",'
+        b'"webserver":"nginx/1.18.0","tech":["Nginx:1.18.0","PHP"],"cdn":true,"cdn_name":"cloudflare"}\n'
+        b'{"url":"http://b.example.com","status_code":"oops","a":["5.6.7.8"]}\n'   # odd status -> None; IP from "a"
+        b'{"url":"https://c.example.com","failed":true}\n'                          # failed probe: dropped
         b'not json at all\n'
         b'{"no_url_here":1}\n')
     out = asyncio.run(probe.run_httpx(["a", "b", "c"], rate_limit=5))
-    assert out == [{"url": "https://a.example.com", "status_code": 200},
-                   {"url": "http://b.example.com", "status_code": None}]
+
+    assert out[0] == {"url": "https://a.example.com", "input": "a.example.com", "status_code": 200,
+                      "ip": "1.2.3.4", "webserver": "nginx/1.18.0", "tech": ["Nginx:1.18.0", "PHP"],
+                      "cdn": True, "cdn_name": "cloudflare"}
+    assert out[1] == {"url": "http://b.example.com", "input": None, "status_code": None, "ip": "5.6.7.8",
+                      "webserver": None, "tech": [], "cdn": False, "cdn_name": None}
+    assert len(out) == 2
+
+
+def test_httpx_asks_for_technology_detection_and_the_server_header(spawned):
+    asyncio.run(probe.run_httpx(["a.example.com"], rate_limit=5))
+    assert "-td" in spawned["argv"] and "-server" in spawned["argv"]
 
 
 def test_katana_output_is_deduplicated_and_sorted(spawned):
