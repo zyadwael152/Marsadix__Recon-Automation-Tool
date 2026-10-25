@@ -75,35 +75,6 @@ async def fetch_alienvault(domain: str, api_key: str = None) -> Tuple[str, Set[s
     return "alienvault", subdomains
 
 
-async def fetch_securitytrails(domain: str, api_key: str = None) -> Tuple[str, Set[str]]:
-    """Query SecurityTrails' subdomains endpoint and skip if no API key."""
-    subdomains = set()
-    if not api_key:
-        logger.info("[-] Skipped SecurityTrails (No API Key provided).")
-        return "securitytrails", subdomains
-
-    url = f"https://api.securitytrails.com/v1/domain/{domain}/subdomains"
-    logger.info("[*] Querying SecurityTrails...")
-    try:
-        loop = asyncio.get_event_loop()
-        req = urllib.request.Request(url, headers={'APIKEY': api_key})
-        response = await loop.run_in_executor(
-            None, partial(urllib.request.urlopen, req, timeout=HTTP_TIMEOUT))
-
-        if response.status == 200:
-            data = json.loads(response.read().decode())
-            # SecurityTrails returns bare labels ("www", "mail"), not FQDNs.
-            for label in data.get('subdomains', []):
-                label = label.strip().lower()
-                if label:
-                    subdomains.add(f"{label}.{domain}")
-        logger.info(f"[+] SecurityTrails discovered {len(subdomains)} subdomains.")
-    except Exception as e:
-        logger.warning(f"[-] SecurityTrails error: {e}")
-
-    return "securitytrails", subdomains
-
-
 async def fetch_shodan(domain: str, api_key: str = None) -> Tuple[str, Set[str]]:
     """
     Query Shodan's host search for hostnames seen under this domain and
