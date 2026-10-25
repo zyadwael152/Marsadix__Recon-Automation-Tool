@@ -128,6 +128,7 @@ install_go_tool naabu       github.com/projectdiscovery/naabu/v2/cmd/naabu
 install_go_tool nuclei      github.com/projectdiscovery/nuclei/v3/cmd/nuclei
 install_go_tool gau         github.com/lc/gau/v2/cmd/gau
 install_go_tool ffuf        github.com/ffuf/ffuf/v2
+install_go_tool alterx      github.com/projectdiscovery/alterx/cmd/alterx
 
 # 6. Amass via the system package manager
 log_info "Installing Amass..."
@@ -186,9 +187,9 @@ fi
 #    instead of unconditionally printing "installed successfully".
 echo ""
 echo -e "${BLUE}=== Installation report ===${RESET}"
-for t in subfinder assetfinder chaos httpx katana dnsx naabu nuclei gau ffuf amass findomain; do
+for t in subfinder assetfinder chaos httpx katana dnsx naabu nuclei gau ffuf alterx amass findomain; do
     if command -v "$t" &>/dev/null; then
-        echo -e "  ${GREEN}[OK]${RESET}   $t"
+        echo -e "  ${GREEN}[OK]${RESET}    $t"
     else
         echo -e "  ${RED}[FAIL]${RESET} $t"
     fi
