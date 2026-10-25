@@ -26,6 +26,9 @@ def _extract_api_keys(ctx) -> dict:
             "virustotal": getattr(cfg, "virustotal_api_key", "") or None,
             "chaos": getattr(cfg, "chaos_api_key", "") or None,
             "alienvault": getattr(cfg, "otx_api_key", "") or None,
+            "securitytrails": getattr(cfg, "securitytrails_api_key", "") or None,
+            "shodan": getattr(cfg, "shodan_api_key", "") or None,
+            "censys": getattr(cfg, "censys_api_key", "") or None,
         }
     # fallback for tests/callers that pass a plain dict context
     if isinstance(ctx, dict) and "config" in ctx:
@@ -35,6 +38,9 @@ def _extract_api_keys(ctx) -> dict:
             "virustotal": get("virustotal_api_key"),
             "chaos": get("chaos_api_key"),
             "alienvault": get("otx_api_key"),
+            "securitytrails": get("securitytrails_api_key"),
+            "shodan": get("shodan_api_key"),
+            "censys": get("censys_api_key"),
         }
     return {}
 
