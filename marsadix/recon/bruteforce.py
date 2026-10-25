@@ -90,14 +90,18 @@ async def bruteforce_subdomains(domain: str, wordlist_path: Optional[str] = None
         with open(wl_file, "w", encoding="utf-8") as fh:
             fh.write("\n".join(words) + "\n")
 
+        # التعديل الذكي: التحقق من مسار الـ resolvers أو التقاط الملف المحلي أوتوماتيك
         if resolvers_path and os.path.isfile(resolvers_path):
             res_file = resolvers_path
+        elif os.path.isfile("resolvers.txt"):
+            res_file = "resolvers.txt"
+            logger.info("[+] Using local trusted resolvers file: resolvers.txt")
         else:
             res_file = os.path.join(tmp, "resolvers.txt")
             with open(res_file, "w", encoding="utf-8") as fh:
                 fh.write("\n".join(DEFAULT_RESOLVERS) + "\n")
-            logger.info("[-] No resolvers_file configured - using a few public resolvers (slow; "
-                        "use a validated resolver list for big wordlists).")
+            logger.warning("[-] No resolvers_file configured - using a few public resolvers (slow; "
+                           "use a validated resolver list for big wordlists).")
 
         cmd = ["puredns", "bruteforce", wl_file, domain, "-r", res_file, "-q"]
         if rate_limit:
