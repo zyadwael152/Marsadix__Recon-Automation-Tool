@@ -4,7 +4,7 @@ import logging
 import urllib.request
 from functools import partial
 from typing import Set, List, Dict, Tuple
-from .api_sources import HTTP_TIMEOUT, fetch_virustotal, fetch_alienvault, fetch_securitytrails, fetch_shodan, fetch_censys
+from .api_sources import HTTP_TIMEOUT, fetch_virustotal, fetch_alienvault, fetch_shodan, fetch_censys
 from .merger import merge_and_track
 
 logger = logging.getLogger(__name__)
@@ -22,9 +22,6 @@ async def run_cli_tool(tool_name: str, command: List[str], timeout: int = 120) -
         try:
             stdout, _ = await asyncio.wait_for(process.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
-            # Don't let one slow source (e.g. amass passive mode on a big
-            # target) block the rest of the recon stage indefinitely - kill
-            # it, keep whatever the other tools already found, and move on.
             process.kill()
             await process.wait()
             logger.warning(f"[-] {tool_name} timed out after {timeout}s - skipped.")
@@ -42,8 +39,6 @@ async def run_cli_tool(tool_name: str, command: List[str], timeout: int = 120) -
     return tool_name, subdomains
 
 async def run_chaos(domain: str, api_key: str = None) -> Tuple[str, Set[str]]:
-    # chaos needs a ProjectDiscovery API key - skip gracefully instead of
-    # letting it fail with a confusing subprocess error, same as VirusTotal.
     if not api_key:
         logger.info("[-] Skipped chaos (No API Key provided).")
         return "chaos", set()
@@ -52,7 +47,7 @@ async def run_chaos(domain: str, api_key: str = None) -> Tuple[str, Set[str]]:
 async def fetch_crtsh(domain: str) -> Tuple[str, Set[str]]:
     subdomains = set()
     url = f"https://crt.sh/?q=%25.{domain}&output=json"
-    logger.info("[*] Querying crt.sh...")
+    logger.info(f"[*] Querying crt.sh for {domain}...")
     try:
         loop = asyncio.get_event_loop()
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -73,14 +68,11 @@ async def fetch_crtsh(domain: str) -> Tuple[str, Set[str]]:
         
     return "crt.sh", subdomains
 
-async def _async_discover(domain: str, api_keys: dict = None) -> Dict[str, List[str]]:
-    if api_keys is None:
-        api_keys = {}
-        
+async def _async_discover_single(domain: str, api_keys: dict) -> Dict[str, List[str]]:
+    """Runs all discovery tools on a SINGLE domain."""
     vt_key = api_keys.get("virustotal")
     chaos_key = api_keys.get("chaos")
     otx_key = api_keys.get("alienvault")
-    st_key = api_keys.get("securitytrails")
     shodan_key = api_keys.get("shodan")
     censys_key = api_keys.get("censys")
     
@@ -93,14 +85,50 @@ async def _async_discover(domain: str, api_keys: dict = None) -> Dict[str, List[
         fetch_crtsh(domain),
         fetch_alienvault(domain, otx_key),
         fetch_virustotal(domain, vt_key),
-        fetch_securitytrails(domain, st_key),
         fetch_shodan(domain, shodan_key),
         fetch_censys(domain, censys_key)
     ]
     results = await asyncio.gather(*tasks)
     tool_outputs = {tool_name: subs for tool_name, subs in results}
-    
     return merge_and_track(tool_outputs)
 
-def discover_subdomains(domain: str, api_keys: dict = None, *args, **kwargs) -> Dict[str, List[str]]:
-    return asyncio.run(_async_discover(domain, api_keys))
+async def _async_discover_recursive(domain: str, api_keys: dict, max_depth: int) -> Dict[str, List[str]]:
+    """Handles Recursion (R12): Re-scans discovered subdomains up to max_depth."""
+    master_results = {}
+    targets_to_scan = {domain}
+    scanned_targets = set()
+    
+    for depth in range(1, max_depth + 1):
+        if not targets_to_scan:
+            break
+            
+        logger.info(f"[*] === Starting Discovery Depth {depth}/{max_depth} for {len(targets_to_scan)} target(s) ===")
+        
+        # تشغيل الفحص على كل النطاقات المكتشفة في نفس الوقت
+        tasks = [_async_discover_single(t, api_keys) for t in targets_to_scan]
+        batch_results = await asyncio.gather(*tasks)
+        
+        scanned_targets.update(targets_to_scan)
+        next_targets = set()
+        
+        # دمج النتائج وتجهيز الجولة اللي بعدها
+        for result_dict in batch_results:
+            for sub, sources in result_dict.items():
+                if sub not in master_results:
+                    master_results[sub] = []
+                for src in sources:
+                    if src not in master_results[sub]:
+                        master_results[sub].append(src)
+                        
+                # لو النطاق ده جديد ومفحصناهوش قبل كده، ضيفه للجولة الجاية
+                if sub not in scanned_targets and sub.endswith(domain):
+                    next_targets.add(sub)
+                    
+        targets_to_scan = next_targets
+        
+    return master_results
+
+def discover_subdomains(domain: str, api_keys: dict = None, max_depth: int = 1, *args, **kwargs) -> Dict[str, List[str]]:
+    if api_keys is None:
+        api_keys = {}
+    return asyncio.run(_async_discover_recursive(domain, api_keys, max_depth))
