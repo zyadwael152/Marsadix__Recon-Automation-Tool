@@ -54,8 +54,10 @@ async def fetch_crtsh(domain: str) -> Tuple[str, Set[str]]:
     try:
         loop = asyncio.get_event_loop()
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        
+        # رفع مهلة الانتظار إلى 45 ثانية لتجنب مشاكل بطء سيرفر crt.sh
         response = await loop.run_in_executor(
-            None, partial(urllib.request.urlopen, req, timeout=HTTP_TIMEOUT))
+            None, partial(urllib.request.urlopen, req, timeout=45))
         
         if response.status == 200:
             data = json.loads(response.read().decode())
@@ -68,7 +70,7 @@ async def fetch_crtsh(domain: str) -> Tuple[str, Set[str]]:
                         subdomains.add(sub)
         logger.info(f"[+] crt.sh discovered {len(subdomains)} clean subdomains.")
     except Exception as e:
-        logger.warning(f"[-] Skipped crt.sh due to error: {e}")
+        logger.warning(f"[-] Skipped crt.sh due to error (Server slow or timeout): {e}")
         
     return "crt.sh", subdomains
 
