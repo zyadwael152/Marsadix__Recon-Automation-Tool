@@ -1,52 +1,161 @@
+"""
+R7: DNS resolution (dnsx) with wildcard filtering.
+
+dnsx resolves every candidate in one bulk pass (A + CNAME). If dnsx isn't
+installed the old stdlib socket resolver is used instead, so a scan never
+fails just because a tool is missing.
+
+Wildcard handling: for hosts that ONLY came from the generated sources
+(permutation / bruteforce), random non-existent names under their parent
+domain are resolved; if the generated host resolves only to those same
+"wildcard" IPs, it's an artifact of *.parent and is dropped. Hosts found by a
+passive source (crt.sh, subfinder ...) are never dropped by this - a real
+certificate or passive-DNS record is evidence on its own.
+
+Returns {host: {"sources": [...], "ip": first_ip, "ips": [...], "cname": [...]}}
+- "sources" and "ip" are what stage.py/graph code already relied on.
+"""
+
 import asyncio
-import socket
+import json
 import logging
-from typing import Dict, List, Optional
+import random
+import socket
+import string
+from collections import Counter
+from typing import Dict, List, Optional, Set
+
+from ._proc import run_async
 
 logger = logging.getLogger(__name__)
 
-# socket.gethostbyname() has NO built-in timeout and does not reliably
-# respect socket.setdefaulttimeout() on every platform. On a slow or
-# unresponsive DNS server it can block for a long time per call -- and this
-# runs once per discovered subdomain, so with dozens/hundreds of candidates
-# the wait adds up even though no single call is "stuck forever". Bounding
-# each lookup with asyncio.wait_for() caps the total time for this stage.
-DNS_TIMEOUT = 5  # seconds per subdomain
+DNS_TIMEOUT = 5            # seconds per socket lookup (fallback path)
+DNSX_TIMEOUT = 600         # whole bulk dnsx run
+SOCKET_CONCURRENCY = 100
+WILDCARD_PROBES = 2
+MAX_WILDCARD_PARENTS = 100
+
+# Source names that mean "we guessed this name" (see permutation.py / bruteforce.py)
+GENERATED_SOURCES = frozenset({"alterx", "permutation", "puredns", "wordlist"})
+
+
+async def _lookup_all(host: str) -> List[str]:
+    """All A records for host via the OS resolver, or [] if it doesn't resolve."""
+    loop = asyncio.get_event_loop()
+    try:
+        _, _, ips = await asyncio.wait_for(
+            loop.run_in_executor(None, socket.gethostbyname_ex, host), timeout=DNS_TIMEOUT)
+        return list(ips)
+    except Exception:
+        return []
 
 
 async def resolve_domain(domain: str) -> Optional[str]:
-    """Resolve a domain to its IP address. Returns None if it doesn't resolve."""
-    loop = asyncio.get_event_loop()
-    try:
-        return await asyncio.wait_for(
-            loop.run_in_executor(None, socket.gethostbyname, domain),
-            timeout=DNS_TIMEOUT)
-    except Exception:
-        return None
+    """Resolve a domain to one IP. Returns None if it doesn't resolve."""
+    ips = await _lookup_all(domain)
+    return ips[0] if ips else None
 
 
-async def filter_active_subdomains(subdomains_dict: Dict[str, List[str]]) -> Dict[str, dict]:
+def parse_dnsx_json(text: str) -> Dict[str, dict]:
+    """Parse `dnsx -json` lines into {host: {"ips": [...], "cname": [...]}}."""
+    out: Dict[str, dict] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            data = json.loads(line)
+        except ValueError:
+            continue
+        host = (data.get("host") or "").strip().lower().rstrip(".")
+        ips = [ip for ip in (data.get("a") or []) if ip]
+        if not host or not ips:
+            continue
+        entry = out.setdefault(host, {"ips": [], "cname": []})
+        for ip in ips:
+            if ip not in entry["ips"]:
+                entry["ips"].append(ip)
+        for cname in data.get("cname") or []:
+            cname = cname.strip().lower().rstrip(".")
+            if cname and cname not in entry["cname"]:
+                entry["cname"].append(cname)
+    return out
+
+
+async def resolve_with_dnsx(hosts: List[str], rate_limit: Optional[int] = None,
+                            timeout: int = DNSX_TIMEOUT) -> Optional[Dict[str, dict]]:
+    """None means dnsx is unavailable/failed - caller falls back to sockets."""
+    if not hosts:
+        return {}
+    cmd = ["dnsx", "-silent", "-a", "-cname", "-json"]
+    if rate_limit:
+        cmd += ["-rl", str(int(rate_limit))]
+    out = await run_async(cmd, stdin_lines=hosts, timeout=timeout, name="dnsx")
+    return None if out is None else parse_dnsx_json(out)
+
+
+async def _resolve_with_socket(hosts: List[str]) -> Dict[str, dict]:
+    sem = asyncio.Semaphore(SOCKET_CONCURRENCY)
+
+    async def one(host):
+        async with sem:
+            return host, await _lookup_all(host)
+
+    pairs = await asyncio.gather(*(one(h) for h in hosts))
+    return {h: {"ips": ips, "cname": []} for h, ips in pairs if ips}
+
+
+async def detect_wildcard_ips(domain: str, probes: int = WILDCARD_PROBES) -> Set[str]:
+    """IPs that random, surely-nonexistent names under `domain` resolve to."""
+    ips: Set[str] = set()
+    for _ in range(probes):
+        label = "".join(random.choices(string.ascii_lowercase + string.digits, k=16))
+        ips.update(await _lookup_all(f"{label}.{domain}"))
+    return ips
+
+
+async def _drop_wildcard_hits(active: Dict[str, dict], domain: str) -> Dict[str, dict]:
+    generated = [h for h, info in active.items() if set(info["sources"]) <= GENERATED_SOURCES]
+    if not generated:
+        return active
+
+    parent_counts = Counter(h.split(".", 1)[1] for h in generated if "." in h)
+    parents = {domain} | {p for p, _ in parent_counts.most_common(MAX_WILDCARD_PARENTS)}
+    parents = sorted(parents)
+    wildcard_ips = dict(zip(parents, await asyncio.gather(*(detect_wildcard_ips(p) for p in parents))))
+
+    dropped = 0
+    for host in generated:
+        wc = wildcard_ips.get(host.split(".", 1)[1], set())
+        if wc and set(active[host]["ips"]) <= wc:
+            del active[host]
+            dropped += 1
+    if dropped:
+        logger.info(f"[+] Wildcard filter dropped {dropped} generated host(s) that only matched a wildcard record.")
+    return active
+
+
+async def filter_active_subdomains(subdomains_dict: Dict[str, List[str]], domain: Optional[str] = None,
+                                   rate_limit: Optional[int] = None) -> Dict[str, dict]:
     """
-    Filter out dead subdomains and attach the resolved IP to each survivor.
-
-    Returns {host: {"sources": [...], "ip": "1.2.3.4"}}. The IP is what lets
-    the Knowledge Graph (core/graph.py) draw "resolves_to" edges between
-    subdomains and the IPs they share -- without it, every subdomain is an
-    isolated node with no relationships to show.
+    Keep only hosts that resolve and attach their IP(s). Pass `domain` to
+    enable the wildcard filter for generated candidates.
     """
-    logger.info(f"[*] Starting DNS resolution for {len(subdomains_dict)} subdomains...")
+    hosts = list(subdomains_dict.keys())
+    logger.info(f"[*] Starting DNS resolution for {len(hosts)} subdomains...")
 
-    active_subdomains = {}
+    resolved = await resolve_with_dnsx(hosts, rate_limit)
+    engine = "dnsx"
+    if resolved is None:
+        engine = "socket"
+        resolved = await _resolve_with_socket(hosts)
 
-    tasks = {
-        domain: asyncio.create_task(resolve_domain(domain))
-        for domain in subdomains_dict.keys()
+    active = {
+        host: {"sources": subdomains_dict[host], "ip": r["ips"][0], "ips": r["ips"], "cname": r["cname"]}
+        for host, r in resolved.items() if host in subdomains_dict
     }
+    if domain:
+        active = await _drop_wildcard_hits(active, domain.lower().strip("."))
 
-    for domain, task in tasks.items():
-        ip = await task
-        if ip:
-            active_subdomains[domain] = {"sources": subdomains_dict[domain], "ip": ip}
-
-    logger.info(f"[+] DNS resolution complete. Active subdomains: {len(active_subdomains)} / {len(subdomains_dict)}")
-    return active_subdomains
+    logger.info(f"[+] DNS resolution ({engine}) complete. Active subdomains: {len(active)} / {len(hosts)}")
+    return active
