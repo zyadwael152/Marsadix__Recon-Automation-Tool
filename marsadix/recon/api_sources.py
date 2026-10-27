@@ -206,31 +206,3 @@ async def fetch_censys(domain: str, api_key: str = None) -> Tuple[str, Set[str]]
     except Exception as e:
         logger.warning("[-] Censys request failed (%s).", type(e).__name__)
     return "censys", subdomains
-
-
-async def fetch_securitytrails(domain: str, api_key: str = None) -> Tuple[str, Set[str]]:
-    """Query SecurityTrails' domain subdomain endpoint; skip cleanly without a key."""
-    subdomains: Set[str] = set()
-    if not api_key:
-        logger.info("[-] Skipped SecurityTrails (No API Key provided).")
-        return "securitytrails", subdomains
-
-    domain = _root_domain(domain)
-    url = f"https://api.securitytrails.com/v1/domain/{urllib.parse.quote(domain, safe='.-')}/subdomains"
-    logger.info("[*] Querying SecurityTrails...")
-    try:
-        data = await _request_json_async(url, {"APIKEY": api_key, "Accept": "application/json"})
-        for label in data.get("subdomains", []):
-            label = str(label).strip().lower().strip(".")
-            if label and all(part and len(part) <= 63 and all(ch.isalnum() or ch == "-" for ch in part)
-                             and not part.startswith("-") and not part.endswith("-")
-                             for part in label.split(".")):
-                host = f"{label}.{domain}"
-                if _under_domain(host, domain):
-                    subdomains.add(host)
-        logger.info("[+] SecurityTrails discovered %d subdomains.", len(subdomains))
-    except urllib.error.HTTPError as e:
-        logger.warning("[-] SecurityTrails request failed with HTTP %s.", e.code)
-    except Exception as e:
-        logger.warning("[-] SecurityTrails request failed (%s).", type(e).__name__)
-    return "securitytrails", subdomains
