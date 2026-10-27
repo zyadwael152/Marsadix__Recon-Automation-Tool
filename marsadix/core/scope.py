@@ -23,6 +23,8 @@ from pathlib import Path
 from typing import Iterable, Optional
 from urllib.parse import urlsplit
 
+from .textfile import read_text
+
 
 class ScopeError(ValueError):
     pass
@@ -46,6 +48,13 @@ def normalize_host(value: str) -> Optional[str]:
     v = (value or "").strip()
     if not v:
         return None
+    # A backslash, a space or a control character makes URL parsers DISAGREE
+    # about the host: Python reads "https://evil.com\@www.example.com/" as
+    # www.example.com (in scope) while a browser or a crawler goes to evil.com;
+    # browsers also silently drop tabs/newlines inside a URL. Ambiguous input is
+    # refused rather than guessed.
+    if any(ch == "\\" or ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in v):
+        return None
     try:                                   # bare IP (incl. IPv6 without brackets)
         return str(ipaddress.ip_address(v.strip("[]")))
     except ValueError:
@@ -59,6 +68,14 @@ def normalize_host(value: str) -> Optional[str]:
     if not host:
         return None
     return host.rstrip(".").lower() or None
+
+
+def valid_hostname(value: str) -> Optional[str]:
+    """A clean DNS name (never an IP), or None. For values that end up in file names or tool arguments."""
+    host = normalize_host(value)
+    if host and _as_ip(host) is None and _DOMAIN_RE.match(host):
+        return host
+    return None
 
 
 def _as_ip(host: str):
@@ -124,7 +141,11 @@ class Scope:
         p = Path(path)
         if not p.is_file():
             raise ScopeError(f"scope file not found: {path}")
-        return cls.from_lines(p.read_text(encoding="utf-8").splitlines(), source=p.name)
+        try:
+            text = read_text(p)
+        except (ValueError, OSError) as e:
+            raise ScopeError(f"cannot read scope file {path}: {e}") from e
+        return cls.from_lines(text.splitlines(), source=p.name)
 
     @classmethod
     def from_target(cls, target: str) -> "Scope":

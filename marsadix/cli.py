@@ -43,8 +43,7 @@ from .core.loader import load_callable
 from .core.log import setup_logging
 from .core.pipeline import run_scan
 from .core.runner import httpx_is_projectdiscovery, tool_status
-from .core.scope import Scope, ScopeError, normalize_host
-from marsadix.recon.ct_monitor import monitor_ct_logs
+from .core.scope import Scope, ScopeError, normalize_host, valid_hostname
 
 log = logging.getLogger("marsadix.cli")
 EXIT_NOT_IMPLEMENTED = 3
@@ -150,10 +149,18 @@ def cmd_monitor(a, cfg: Config) -> int:
 
 # 🆕 R14: Command implementation for CT stream monitoring
 def cmd_ct_monitor(a, cfg: Config) -> int:
-    target = normalize_host(a.target) or a.target
-    out_file = f"outputs/{target}_ct_assets.txt"
-    os.makedirs("outputs", exist_ok=True)
-    
+    # Imported here, not at the top: a problem inside the recon package must not
+    # take every other command down with it.
+    from marsadix.recon.ct_monitor import monitor_ct_logs
+
+    # The target becomes part of a file name, so it must be a clean host. It used
+    # to fall back to the raw argument, and "../../x" wrote outside the folder.
+    target = valid_hostname(a.target)
+    if not target:
+        raise ScopeError(f"invalid target for ct-monitor (a domain name is required): {a.target!r}")
+    os.makedirs(cfg.output_dir, exist_ok=True)         # the configured output folder (already git-ignored)
+    out_file = os.path.join(cfg.output_dir, f"{target}_ct_assets.txt")
+
     try:
         asyncio.run(monitor_ct_logs(target, output_file=out_file))
     except KeyboardInterrupt:
@@ -242,6 +249,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             cfg.db_path = args.db
         return COMMANDS[args.command](args, cfg)
     except (ConfigError, ScopeError, db.SchemaVersionError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    except OSError as e:                      # unreadable / missing / locked file: a message, not a traceback
         print(f"error: {e}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:

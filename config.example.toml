@@ -6,3 +6,17 @@ rate_limit = 50        # requests per second passed to the tools
 tool_timeout = 600     # seconds per external tool
 scan_mode = "passive"  # passive | standard | full                 (C15)
 allow_injection = false  # true only when injection detection (A5) is wanted
+
+# --- Recon tuning (used by `marsadix scan --mode standard|full`) --------------
+# DNS queries per second for the resolver / bruteforce step. 0 = the tool's own
+# default, which is NOT gentle: set a number when you scan from a shared network.
+# dns_rate_limit = 100
+# Upper bound on generated permutation candidates (word-list mutations of known hosts).
+# max_permutations = 20000
+# Word list for DNS bruteforce and virtual-host discovery. Empty = built-in small list;
+# VHost discovery only runs when a word list is configured.
+# bruteforce_wordlist = "wordlists/subdomains.txt"
+# A resolver list you trust (one IP per line). Empty = a `resolvers.txt` found in the folder you run
+# Marsadix from, otherwise a few built-in public resolvers. Set it explicitly: a resolvers.txt
+# you did not write would decide which DNS answers the whole scan believes.
+# resolvers_file = "resolvers.txt"

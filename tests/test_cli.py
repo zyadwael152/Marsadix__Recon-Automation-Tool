@@ -1,3 +1,4 @@
+import os
 import pytest
 from marsadix import db
 from marsadix.cli import main
@@ -187,3 +188,61 @@ def test_snapshots_lists_scans(tmp_path, capsys):
     assert main(["--db", dbp, "snapshots", "example.com"]) == 0
     out = capsys.readouterr().out
     assert "Snapshots for example.com (2 scan(s))" in out
+
+
+
+# ---------------------------------------------------------------------------
+# ct-monitor output path, Windows-written scope files, unreadable files
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def ct_calls(monkeypatch):
+    calls = []
+
+    async def fake_monitor(target, output_file=None):
+        calls.append({"target": target, "out": output_file})
+    monkeypatch.setattr("marsadix.recon.ct_monitor.monitor_ct_logs", fake_monitor)
+    return calls
+
+
+def test_ct_monitor_writes_into_the_configured_output_folder(tmp_path, ct_calls):
+    rc = main(["--no-banner", "--db", str(tmp_path / "t.db"), "ct-monitor", "Example.COM"])
+    assert rc == 0
+    assert ct_calls == [{"target": "example.com", "out": os.path.join("output", "example.com_ct_assets.txt")}]
+    assert (tmp_path / "output").is_dir() and not (tmp_path / "outputs").exists()
+
+
+def test_ct_monitor_honours_output_dir_from_the_environment(tmp_path, ct_calls, monkeypatch):
+    monkeypatch.setenv("MARSADIX_OUTPUT_DIR", "results")
+    main(["--no-banner", "ct-monitor", "example.com"])
+    assert ct_calls[0]["out"] == os.path.join("results", "example.com_ct_assets.txt")
+
+
+@pytest.mark.parametrize("target", ["../../escape", "..\\..\\escape", "/etc/cron.d/x", "1.2.3.4", "a b.com", ".."])
+def test_ct_monitor_rejects_targets_that_are_not_clean_domain_names(tmp_path, capsys, ct_calls, target):
+    rc = main(["--no-banner", "ct-monitor", target])
+    assert rc == 1 and "invalid target for ct-monitor" in capsys.readouterr().err
+    assert ct_calls == []
+    assert list(tmp_path.iterdir()) == []                          # nothing was created anywhere
+
+
+def test_an_unusable_output_folder_is_an_error_message_not_a_traceback(tmp_path, capsys, ct_calls, monkeypatch):
+    (tmp_path / "taken").write_text("i am a file, not a folder")
+    monkeypatch.setenv("MARSADIX_OUTPUT_DIR", "taken")
+    rc = main(["--no-banner", "ct-monitor", "example.com"])
+    assert rc == 1 and capsys.readouterr().err.startswith("error:")
+
+
+def test_scan_accepts_a_scope_file_saved_as_utf16_by_powershell(tmp_path, capsys):
+    f = tmp_path / "scope.txt"
+    f.write_bytes("example.com\r\n*.example.com\r\n".encode("utf-16"))
+    rc = main(["--no-banner", "--db", str(tmp_path / "t.db"), "scan", "example.com", "--mode", "standard", "--scope", str(f)])
+    assert rc == 0 and "[mode=standard]" in capsys.readouterr().out
+
+
+def test_a_garbage_scope_file_is_a_one_line_error(tmp_path, capsys):
+    f = tmp_path / "scope.txt"
+    f.write_bytes(b"example.com\n\xff\xfe\xfa\n")
+    rc = main(["--no-banner", "--db", str(tmp_path / "t.db"), "scan", "example.com", "--mode", "standard", "--scope", str(f)])
+    err = capsys.readouterr().err
+    assert rc == 1 and err.startswith("error: cannot read scope file") and "Traceback" not in err

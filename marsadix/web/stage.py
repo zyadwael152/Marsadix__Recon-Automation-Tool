@@ -32,6 +32,7 @@ from typing import Iterable, List
 from urllib.parse import urlsplit
 
 from .. import db
+from ..core import netguard
 from ..core.scope import normalize_host
 from ..models import Confidence, DiscoverySource, Technology, WebItem, WebItemKind
 from . import fingerprint
@@ -98,6 +99,17 @@ def run(ctx, *args, **kwargs) -> dict:
     if len(all_hosts) != len(hosts):
         logger.info("[*] %d of %d discovered hosts are out of scope and will not be probed",
                     len(all_hosts) - len(hosts), len(all_hosts))
+
+    # An in-scope NAME can be made to resolve to 127.0.0.1, 10.x or the cloud
+    # metadata address (see core/netguard.py): never probe those unless the scope
+    # file lists the address explicitly.
+    known_ip = {a["host"]: netguard.asset_ip(a) for a in assets}
+    internal = {h: netguard.blocked_reason(known_ip[h], ctx.scope) for h in hosts if known_ip.get(h)}
+    for h, why in sorted(internal.items()):
+        if why:
+            logger.warning("[!] %s resolves to %s (%s): not probed. If this is an authorised "
+                           "internal test, list the address or range in the scope file.", h, known_ip[h], why)
+    hosts = [h for h in hosts if not internal.get(h)]
     if not hosts:
         logger.warning("[-] No in-scope hosts to probe. Skipping Web stage.")
         return {"live_urls": [], "endpoints": []}
@@ -107,6 +119,13 @@ def run(ctx, *args, **kwargs) -> dict:
 
     probed = asyncio.run(run_httpx(hosts, rate))
     live = [r for r in probed if ctx.in_scope(r["url"])]
+    # The name may have resolved differently when httpx asked than when recon did.
+    # The request has already gone out, but nothing more is done with such a host
+    # (no crawl, nothing stored from it).
+    for r in [r for r in live if r.get("ip") and netguard.blocked_reason(r["ip"], ctx.scope)]:
+        logger.warning("[!] %s answered from %s (%s): discarded, not crawled",
+                       r["url"], r["ip"], netguard.blocked_reason(r["ip"], ctx.scope))
+    live = [r for r in live if not (r.get("ip") and netguard.blocked_reason(r["ip"], ctx.scope))]
     live_urls = [r["url"] for r in live]
 
     endpoints: List[str] = []

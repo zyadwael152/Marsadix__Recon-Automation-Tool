@@ -253,7 +253,7 @@ def rich(monkeypatch):
     """httpx answers with realistic records (technologies, Server header, IP, CDN)."""
     async def fake_httpx(hosts, rate_limit=None):
         return [
-            {"url": "https://www.example.com", "input": "www.example.com", "status_code": 200, "ip": "203.0.113.5",
+            {"url": "https://www.example.com", "input": "www.example.com", "status_code": 200, "ip": "93.184.216.34",
              "webserver": "nginx/1.18.0 (Ubuntu)", "tech": ["Nginx:1.18.0", "PHP:8.1.2", "HSTS", "jQuery:3.6.0"],
              "cdn": False, "cdn_name": None},
             {"url": "https://api.example.com", "input": "api.example.com", "status_code": 200, "ip": "104.21.5.9",
@@ -300,18 +300,18 @@ def test_cdn_and_ip_are_recorded_on_the_asset(conn, tmp_path, rich):
     assets = {a["host"]: a for a in db.get_assets(conn, ctx.scan.id)}
     assert assets["api.example.com"]["is_cdn"] == 1 and assets["api.example.com"]["cdn_name"] == "cloudflare"
     assert assets["api.example.com"]["ip"] == "104.21.5.9"
-    assert assets["www.example.com"]["is_cdn"] == 0 and assets["www.example.com"]["ip"] == "203.0.113.5"
+    assert assets["www.example.com"]["is_cdn"] == 0 and assets["www.example.com"]["ip"] == "93.184.216.34"
 
 
 def test_an_ip_recon_already_resolved_is_not_overwritten_and_cdn_is_never_switched_off(conn, tmp_path, rich):
     ctx = _ctx(conn, tmp_path, "standard")
-    conn.execute("UPDATE assets SET ip='198.51.100.7' WHERE host='www.example.com' AND scan_id=?", (ctx.scan.id,))
+    conn.execute("UPDATE assets SET ip='151.101.1.5' WHERE host='www.example.com' AND scan_id=?", (ctx.scan.id,))
     conn.execute("UPDATE assets SET is_cdn=1, cdn_name='akamai' WHERE host='www.example.com' AND scan_id=?", (ctx.scan.id,))
     conn.commit()
     web_stage.run(ctx)                                 # httpx says www is NOT behind a CDN this time
 
     www = next(a for a in db.get_assets(conn, ctx.scan.id) if a["host"] == "www.example.com")
-    assert www["ip"] == "198.51.100.7" and www["is_cdn"] == 1 and www["cdn_name"] == "akamai"
+    assert www["ip"] == "151.101.1.5" and www["is_cdn"] == 1 and www["cdn_name"] == "akamai"
 
 
 def test_passive_mode_stores_no_technologies(conn, tmp_path, rich):
@@ -329,3 +329,51 @@ def test_technologies_reach_the_knowledge_graph_with_their_versions(conn, tmp_pa
     assert "technology:www.example.com:Nginx:1.18.0" in ids
     assert "cpe:cpe:2.3:a:php:php:8.1.2:*:*:*:*:*:*:*" in ids
     assert "cdn:cloudflare" in ids
+
+
+# ------------------------------- an in-scope NAME can be made to resolve to the tester's own network
+
+def _set_ip(conn, scan_id, host, ip):
+    conn.execute("UPDATE assets SET ip=? WHERE scan_id=? AND host=?", (ip, scan_id, host))
+    conn.commit()
+
+
+@pytest.mark.parametrize("ip", ["127.0.0.1", "10.0.0.5", "169.254.169.254", "192.168.1.10", "::1", "fe80::1"])
+def test_hosts_resolving_to_internal_addresses_are_never_probed(conn, tmp_path, calls, ip):
+    ctx = _ctx(conn, tmp_path, "standard")
+    _set_ip(conn, ctx.scan.id, "www.example.com", ip)
+    _set_ip(conn, ctx.scan.id, "api.example.com", "93.184.216.34")
+    web_stage.run(ctx)
+    assert calls["httpx"] == [["api.example.com"]]
+
+
+def test_an_internal_range_listed_in_the_scope_file_is_probed(conn, tmp_path, calls):
+    ctx = _ctx(conn, tmp_path, "standard", scope_lines=("example.com", "*.example.com", "!dev.example.com", "10.0.0.0/8"))
+    _set_ip(conn, ctx.scan.id, "www.example.com", "10.0.0.5")
+    _set_ip(conn, ctx.scan.id, "api.example.com", "192.168.1.1")          # not listed
+    web_stage.run(ctx)
+    assert calls["httpx"] == [["www.example.com"]]
+
+
+def test_a_host_that_answers_from_an_internal_address_is_discarded_and_not_crawled(conn, tmp_path, monkeypatch):
+    """The name resolved to a public IP for recon but to 10.0.0.5 when httpx asked (DNS can change between lookups)."""
+    crawled = []
+
+    async def fake_httpx(hosts, rate_limit=None):
+        return [{"url": "https://www.example.com", "input": "www.example.com", "status_code": 200, "ip": "10.0.0.5",
+                 "webserver": "nginx/1.18.0", "tech": ["Nginx:1.18.0"], "cdn": False, "cdn_name": None},
+                {"url": "https://api.example.com", "input": "api.example.com", "status_code": 200, "ip": "93.184.216.34",
+                 "webserver": None, "tech": ["PHP:8.1.2"], "cdn": False, "cdn_name": None}]
+
+    async def fake_katana(urls, rate_limit=None):
+        crawled.extend(urls)
+        return []
+    monkeypatch.setattr(web_stage, "run_httpx", fake_httpx)
+    monkeypatch.setattr(web_stage, "run_katana", fake_katana)
+
+    ctx = _ctx(conn, tmp_path, "full")
+    out = web_stage.run(ctx)
+
+    assert out["live_urls"] == ["https://api.example.com"] and crawled == ["https://api.example.com"]
+    assert {t["host"] for t in db.get_technologies(conn, ctx.scan.id)} == {"api.example.com"}
+    assert {w["host"] for w in db.get_web_items(conn, ctx.scan.id)} == {"api.example.com"}

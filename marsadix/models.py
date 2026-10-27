@@ -41,6 +41,7 @@ class ScanStatus(str, Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    INTERRUPTED = "interrupted"     # Ctrl+C or the process was stopped mid-scan
 
 
 class ScanMode(str, Enum):

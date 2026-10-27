@@ -13,6 +13,13 @@ Rules this stage follows:
   * only hosts that are in scope (the stored flag AND the scope rules);
   * hosts httpx found behind a CDN/WAF are not port-scanned: the ports belong
     to the CDN, not to the target;
+  * only PUBLIC addresses (core/netguard.py): an in-scope NAME can be made to
+    resolve to 127.0.0.1, 10.x or 169.254.169.254, which would turn the scan
+    against the tester's own machine/network. An internal range is scanned only
+    when the scope file lists it explicitly;
+  * naabu is given the IP addresses, not the names. If it resolved the names
+    itself, the address it scanned could differ from the one checked above (the
+    DNS answer can change between the two lookups);
   * the scan's rate limit is passed to both tools;
   * a missing tool makes the stage "skipped" with the reason, never a crash.
 """
@@ -22,6 +29,7 @@ import logging
 from typing import Optional
 
 from .. import db
+from ..core import netguard
 from ..core.runner import ToolNotFound
 from ..models import Confidence, Service, Technology
 from ..web import fingerprint
@@ -54,45 +62,66 @@ def run(ctx, *args, **kwargs) -> dict:
 
     scan_id = ctx.scan.id
     assets = db.get_assets(ctx.conn, scan_id)
-    in_scope = sorted({a["host"] for a in assets if a["in_scope"] and ctx.in_scope(a["host"])})
+    in_scope = [a for a in assets if a["in_scope"] and ctx.in_scope(a["host"])]
     behind_cdn = {a["host"] for a in assets if a["is_cdn"]}
-    hosts = [h for h in in_scope if h not in behind_cdn]
-    if len(in_scope) != len(hosts):
-        logger.info("[*] %d host(s) behind a CDN/WAF are not port-scanned", len(in_scope) - len(hosts))
-    if not hosts:
+
+    host_ip: dict = {}                 # host -> the (public, checked) IP that will be scanned
+    n_cdn, no_ip, blocked = 0, [], []
+    for a in sorted(in_scope, key=lambda r: r["host"]):
+        host = a["host"]
+        if host in behind_cdn:
+            n_cdn += 1
+            continue
+        ip = netguard.asset_ip(a)
+        if not ip:
+            no_ip.append(host)
+            continue
+        why = netguard.blocked_reason(ip, ctx.scope)
+        if why:
+            blocked.append(host)
+            logger.warning("[!] %s resolves to %s (%s): not scanned. If this is an authorised "
+                           "internal test, list the address or range in the scope file.", host, ip, why)
+            continue
+        host_ip[host] = ip
+    if n_cdn:
+        logger.info("[*] %d host(s) behind a CDN/WAF are not port-scanned", n_cdn)
+    if no_ip:
+        logger.info("[*] %d host(s) have no resolved IP and are not port-scanned", len(no_ip))
+
+    base = {"blocked": len(blocked), "no_ip": len(no_ip)}
+    if not host_ip:
         logger.info("[-] No in-scope hosts to scan.")
-        return {"hosts": 0, "open_ports": 0, "services": 0, "technologies": 0}
+        return {"hosts": 0, "open_ports": 0, "services": 0, "technologies": 0, **base}
 
     rate = ctx.scan.rate_limit or ctx.config.rate_limit
     timeout = ctx.config.tool_timeout
+    unique_ips = sorted(set(host_ip.values()))          # one scan per address, however many names share it
     try:
-        found = run_naabu(hosts, rate, timeout)
+        found = run_naabu(unique_ips, rate, timeout)
     except ToolNotFound as e:
         logger.warning("[-] Ports stage skipped: %s", e)
         return {"skipped": str(e)}
 
-    # naabu answers by hostname, or by IP when the asset itself is an IP
-    asset_ip = {a["host"]: a["ip"] for a in assets}
-    ports: dict = {}
-    ips: dict = {}
-    for host in hosts:
-        entry = found.get(host.lower()) or (found.get(asset_ip[host].lower()) if asset_ip.get(host) else None)
-        if entry and entry["ports"]:
-            ports[host] = entry["ports"]
-            ips[host] = _valid_ip(entry["ip"]) or _valid_ip(asset_ip.get(host))
-            if ips[host]:
-                db.update_asset_network(ctx.conn, scan_id, host, ip=ips[host])
+    # naabu answers by the IP it was given (it prints no "host" key for an IP input)
+    ports_by_ip: dict = {}
+    for key, entry in found.items():
+        ip = _valid_ip(key) or _valid_ip(entry.get("ip"))
+        if ip and entry["ports"]:
+            ports_by_ip.setdefault(ip, set()).update(entry["ports"])
+
+    ports = {h: sorted(ports_by_ip[ip]) for h, ip in host_ip.items() if ip in ports_by_ip}
+    ips = {h: host_ip[h] for h in ports}
+    for host, ip in ips.items():
+        db.update_asset_network(ctx.conn, scan_id, host, ip=ip)
 
     # ---- full mode: ask each distinct IP's open ports what they are running
     details: dict = {}               # (ip, port) -> nmap record
     nmap_note = None
     if ports and ctx.allows("full"):
-        by_ip: dict = {}
-        for host, plist in ports.items():
-            if ips.get(host):
-                by_ip.setdefault(ips[host], set()).update(plist)   # one scan per IP, not per hostname
         try:
-            for ip, plist in sorted(by_ip.items()):
+            for ip, plist in sorted(ports_by_ip.items()):
+                if ip not in ips.values():
+                    continue
                 for rec in run_nmap(ip, sorted(plist), rate, timeout):
                     details[(ip, rec["port"])] = rec
         except ToolNotFound as e:
@@ -125,8 +154,8 @@ def run(ctx, *args, **kwargs) -> dict:
     logger.info("[+] %d open port(s) on %d host(s); stored %d service(s), %d technology record(s)",
                 sum(len(p) for p in ports.values()), len(ports), n_services, n_tech)
 
-    out = {"hosts": len(hosts), "open_ports": sum(len(p) for p in ports.values()),
-           "services": n_services, "technologies": n_tech}
+    out = {"hosts": len(host_ip), "open_ports": sum(len(p) for p in ports.values()),
+           "services": n_services, "technologies": n_tech, **base}
     if nmap_note:
         out["note"] = nmap_note
     return out

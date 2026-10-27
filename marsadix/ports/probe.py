@@ -7,7 +7,6 @@ The parsers are separate pure functions so they can be tested without either
 tool installed.
 """
 
-import json
 import logging
 import xml.etree.ElementTree as ET
 from typing import Optional
@@ -62,6 +61,11 @@ def parse_nmap_xml(xml_text: str) -> list:
     Returns [] for empty or malformed XML (a scan that timed out half way).
     """
     if not xml_text or "<nmaprun" not in xml_text:
+        return []
+    if "<!ENTITY" in xml_text:
+        # nmap never emits entity declarations; their only purpose in this input
+        # would be an entity-expansion ("billion laughs") attack through a crafted banner.
+        log.warning("[-] nmap XML contains entity declarations: ignored")
         return []
     try:
         root = ET.fromstring(xml_text[xml_text.index("<?xml"):] if "<?xml" in xml_text else xml_text)

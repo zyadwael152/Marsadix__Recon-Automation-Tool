@@ -7,6 +7,7 @@ Secrets (API keys, webhooks) go in .env ONLY, never in config.toml or git.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field, fields
 from pathlib import Path
@@ -16,6 +17,10 @@ try:
     import tomllib  # Python 3.11+
 except ModuleNotFoundError:  # Python 3.10
     tomllib = None
+
+from .textfile import read_text
+
+log = logging.getLogger(__name__)
 
 
 class ConfigError(ValueError):
@@ -28,6 +33,11 @@ SCAN_MODES = ("passive", "standard", "full")
 ENV_MAP = {
     "MARSADIX_DB": "db_path",
     "MARSADIX_OUTPUT_DIR": "output_dir",
+    # Recon tuning
+    "MARSADIX_DNS_RATE_LIMIT": "dns_rate_limit",
+    "MARSADIX_MAX_PERMUTATIONS": "max_permutations",
+    "MARSADIX_BRUTEFORCE_WORDLIST": "bruteforce_wordlist",
+    "MARSADIX_RESOLVERS_FILE": "resolvers_file",
     # CVE sources
     "NVD_API_KEY": "nvd_api_key",
     # Recon data sources (R2)
@@ -54,6 +64,15 @@ class Config:
     tool_timeout: int = 600       # seconds allowed per external tool
     scan_mode: str = "passive"    # passive | standard | full               (C15)
     allow_injection: bool = False  # explicit opt-in for injection checks   (A5)
+
+    # Recon tuning. recon/stage.py reads these with getattr(...) so it keeps
+    # working without them -- which meant that, until they existed here, they
+    # could not be set at all: DNS resolution and bruteforce ran with no rate
+    # limit and the VHost step (needs a wordlist) could never run.
+    dns_rate_limit: int = 0        # DNS queries/second; 0 = the tool's own default
+    max_permutations: int = 20000  # cap on generated permutation candidates
+    bruteforce_wordlist: str = ""  # path; "" = the small built-in list
+    resolvers_file: str = ""       # path to a validated resolver list; "" = built-in public ones
 
     # CVE sources
     nvd_api_key: str = field(default="", repr=False)
@@ -82,6 +101,10 @@ class Config:
             raise ConfigError("tool_timeout must be >= 1")
         if self.scan_mode not in SCAN_MODES:
             raise ConfigError(f"scan_mode must be one of {SCAN_MODES}")
+        if self.dns_rate_limit < 0:
+            raise ConfigError("dns_rate_limit must be >= 0 (0 = tool default)")
+        if self.max_permutations < 1:
+            raise ConfigError("max_permutations must be >= 1")
 
     def has_source_key(self, name: str) -> bool:
         """e.g. cfg.has_source_key('shodan') -> bool. Used to skip sources cleanly."""
@@ -89,16 +112,39 @@ class Config:
 
 
 def load_dotenv(path: str = ".env") -> None:
-    """Tiny .env reader (KEY=VALUE). Real environment variables win."""
+    """
+    Tiny .env reader (KEY=VALUE). Real environment variables win.
+
+    Only the variables Marsadix knows (ENV_MAP) are read. It used to copy EVERY
+    line into the process environment, and every external tool the scan starts
+    inherits that environment: a .env in the current directory could set
+    LD_PRELOAD (code execution), HTTPS_PROXY (traffic interception),
+    PYTHONSTARTUP, PATH-like variables... so running Marsadix inside a folder you
+    did not create was unsafe.
+    """
     p = Path(path)
     if not p.is_file():
         return
-    for raw in p.read_text(encoding="utf-8").splitlines():
+    try:
+        text = read_text(p)
+    except (ValueError, OSError) as e:
+        raise ConfigError(f"cannot read {path}: {e}") from e
+    ignored = []
+    for raw in text.splitlines():
         line = raw.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+        key = key.strip()
+        if key.startswith("export "):
+            key = key[len("export "):].strip()
+        if key not in ENV_MAP:
+            ignored.append(key)
+            continue
+        os.environ.setdefault(key, value.strip().strip('"').strip("'"))
+    if ignored:
+        log.warning("%s: ignoring unknown variable(s): %s (only Marsadix's own settings are read)",
+                    path, ", ".join(sorted(set(ignored))))
 
 
 def load_config(path: Optional[str] = None) -> Config:
@@ -113,10 +159,17 @@ def load_config(path: Optional[str] = None) -> Config:
             raise ConfigError(
                 "Reading config.toml needs Python 3.11+. "
                 "Upgrade Python or use environment variables instead.")
-        data = tomllib.loads(toml_path.read_text(encoding="utf-8"))
+        try:
+            data = tomllib.loads(read_text(toml_path))
+        except (ValueError, OSError) as e:          # tomllib.TOMLDecodeError is a ValueError
+            raise ConfigError(f"cannot read {toml_path}: {e}") from e
         unknown = set(data) - set(known)
         if unknown:
             raise ConfigError(f"unknown keys in {toml_path}: {', '.join(sorted(unknown))}")
+        secrets = sorted(k for k in data if not known[k].repr)          # fields declared repr=False
+        if secrets:
+            log.warning("%s contains secret setting(s) (%s): keep keys in .env, which git ignores, "
+                        "not in a file that is easy to commit", toml_path, ", ".join(secrets))
         for k, v in data.items():
             want = type(getattr(cfg, k))
             if not isinstance(v, want):
@@ -126,8 +179,17 @@ def load_config(path: Optional[str] = None) -> Config:
         raise ConfigError(f"config file not found: {path}")
 
     for env, name in ENV_MAP.items():
-        if os.environ.get(env):
-            setattr(cfg, name, os.environ[env])
+        raw = os.environ.get(env)
+        if not raw:
+            continue
+        want = type(getattr(cfg, name))
+        if want is int:                      # environment values are always text
+            try:
+                setattr(cfg, name, int(raw))
+            except ValueError:
+                raise ConfigError(f"{env} must be a whole number, got {raw!r}") from None
+        else:
+            setattr(cfg, name, raw)
 
     cfg.validate()
     return cfg

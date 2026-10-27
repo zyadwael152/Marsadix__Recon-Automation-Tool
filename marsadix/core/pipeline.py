@@ -19,7 +19,7 @@ db.save_many(ctx.conn, "assets", [...]).
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from typing import Optional
 
 from .. import db
@@ -141,44 +141,72 @@ def run_scan(target: str, config: Config, scope: Optional[Scope] = None,
 
     conn = db.connect(config.db_path)
     db.init_db(conn)
+    scan = None
+    try:
+        # "Baseline" = no scan of this target has COMPLETED yet. It used to count
+        # every scan row, so one crashed or Ctrl+C'd first scan made the next one
+        # (the first real one) "not a baseline".
+        first = conn.execute("SELECT COUNT(*) FROM scans WHERE target=? AND status='completed'",
+                             (host,)).fetchone()[0] == 0
+        scan = Scan(
+            target=host,
+            status=ScanStatus.RUNNING,
+            is_baseline=first,
+            max_depth=resolved_depth,
+            rate_limit=resolved_rate,
+            mode=ScanMode(resolved_mode),
+            scope_file=scope_file,
+        )
+        db.save_scan(conn, scan)
+        log.info("scan #%s started: %s (baseline=%s, mode=%s)", scan.id, host, first, resolved_mode)
 
-    first = conn.execute("SELECT COUNT(*) FROM scans WHERE target=?", (host,)).fetchone()[0] == 0
-    scan = Scan(
-        target=host,
-        status=ScanStatus.RUNNING,
-        is_baseline=first,
-        max_depth=resolved_depth,
-        rate_limit=resolved_rate,
-        mode=ScanMode(resolved_mode),
-        scope_file=scope_file,
-    )
-    db.save_scan(conn, scan)
-    log.info("scan #%s started: %s (baseline=%s, mode=%s)", scan.id, host, first, resolved_mode)
+        ctx = Context(conn=conn, scan=scan, scope=scope, config=run_config)
+        results = []
+        for name, path in STAGES:
+            try:
+                fn = load_callable(path)
+            except Exception as e:      # the stage's own import is broken (e.g. a mistyped module name)
+                log.exception("stage '%s' could not be loaded", name)
+                results.append(StageResult(name, "failed", f"could not load {path}: {type(e).__name__}: {e}"))
+                continue
+            if fn is None:
+                log.info("stage '%s' not implemented yet, skipping", name)
+                results.append(StageResult(name, "skipped", f"{path} not found"))
+                continue
+            try:
+                log.info("stage '%s' started", name)
+                outcome = fn(ctx)
+                # A stage that deliberately did nothing (e.g. the mode forbids it)
+                # returns {"skipped": "<reason>"} so `marsadix scan` reports it as
+                # skipped instead of a misleading "ok".
+                if isinstance(outcome, dict) and outcome.get("skipped"):
+                    results.append(StageResult(name, "skipped", str(outcome["skipped"])))
+                else:
+                    results.append(StageResult(name, "ok"))
+            except Exception as e:  # one broken stage must not kill the scan
+                log.exception("stage '%s' failed", name)
+                results.append(StageResult(name, "failed", f"{type(e).__name__}: {e}"))
 
-    ctx = Context(conn=conn, scan=scan, scope=scope, config=run_config)
-    results = []
-    for name, path in STAGES:
-        fn = load_callable(path)
-        if fn is None:
-            log.info("stage '%s' not implemented yet, skipping", name)
-            results.append(StageResult(name, "skipped", f"{path} not found"))
-            continue
-        try:
-            log.info("stage '%s' started", name)
-            outcome = fn(ctx)
-            # A stage that deliberately did nothing (e.g. the mode forbids it)
-            # returns {"skipped": "<reason>"} so `marsadix scan` reports it as
-            # skipped instead of a misleading "ok".
-            if isinstance(outcome, dict) and outcome.get("skipped"):
-                results.append(StageResult(name, "skipped", str(outcome["skipped"])))
-            else:
-                results.append(StageResult(name, "ok"))
-        except Exception as e:  # one broken stage must not kill the scan
-            log.exception("stage '%s' failed", name)
-            results.append(StageResult(name, "failed", f"{type(e).__name__}: {e}"))
+        failed = any(r.status == "failed" for r in results)
+        db.finish_scan(conn, scan.id, "failed" if failed else "completed")
+        scan.status = ScanStatus.FAILED if failed else ScanStatus.COMPLETED
+        return scan, results
+    except (KeyboardInterrupt, SystemExit):
+        _close_scan(conn, scan, ScanStatus.INTERRUPTED)
+        raise
+    except Exception:
+        _close_scan(conn, scan, ScanStatus.FAILED)
+        raise
+    finally:
+        conn.close()
 
-    failed = any(r.status == "failed" for r in results)
-    db.finish_scan(conn, scan.id, "failed" if failed else "completed")
-    scan.status = ScanStatus.FAILED if failed else ScanStatus.COMPLETED
-    conn.close()
-    return scan, results
+
+def _close_scan(conn, scan, status: ScanStatus) -> None:
+    """Never leave a scan 'running' when the process is going down: the row would stay that way forever."""
+    if scan is None or scan.id is None:
+        return
+    try:
+        db.finish_scan(conn, scan.id, status.value)
+        scan.status = status
+    except Exception:                                  # the DB itself may be what failed
+        log.exception("could not record scan #%s as %s", scan.id, status.value)
