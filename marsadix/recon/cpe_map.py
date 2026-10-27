@@ -46,10 +46,12 @@ def generate_cpe(tech_name: str, version: Optional[str] = None) -> Optional[str]
     if tech_lower in CPE_DICTIONARY:
         vendor, product, part = CPE_DICTIONARY[tech_lower]
     else:
-        # لو تقنية جديدة، بنعملها استنتاج تلقائي (Best Effort)
-        clean_name = tech_lower.replace(" ", "_")
-        vendor, product, part = clean_name, clean_name, "a"
+        # CPE identifiers must come from a curated mapping or trusted detector.
+        # Guessing vendor/product from display text creates false CVE matches.
+        logger.debug("No curated CPE mapping for technology %r; leaving CPE unset", tech_name)
+        return None
 
-    ver_str = version.strip() if version else "-"
+    # In CPE, '*' means any version; '-' means not applicable, not unknown.
+    ver_str = version.strip() if version and version.strip() else "*"
     
     return f"cpe:/{part}:{vendor}:{product}:{ver_str}"

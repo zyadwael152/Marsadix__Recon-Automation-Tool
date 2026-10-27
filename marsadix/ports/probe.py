@@ -62,9 +62,9 @@ def parse_nmap_xml(xml_text: str) -> list:
     """
     if not xml_text or "<nmaprun" not in xml_text:
         return []
-    if "<!ENTITY" in xml_text:
-        # nmap never emits entity declarations; their only purpose in this input
-        # would be an entity-expansion ("billion laughs") attack through a crafted banner.
+    if "<!ENTITY" in xml_text.upper():
+        # nmap never needs a document type or entity declarations. Reject them
+        # before parsing untrusted tool output (which may include crafted banners).
         log.warning("[-] nmap XML contains entity declarations: ignored")
         return []
     try:

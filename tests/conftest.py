@@ -30,3 +30,9 @@ def _fake_discover_subdomains(domain, api_keys=None, *args, **kwargs):
 def _no_real_recon_network(monkeypatch):
     monkeypatch.setattr(
         "marsadix.recon.stage.discover_subdomains", _fake_discover_subdomains)
+    # Pipeline/CLI tests must never launch puredns or query public resolvers.
+    # Candidate expansion has its own unit-test surface and is intentionally
+    # bypassed in end-to-end lifecycle tests.
+    async def _fake_expand_candidates(ctx, target, raw_results):
+        return raw_results
+    monkeypatch.setattr("marsadix.recon.stage._expand_candidates", _fake_expand_candidates)

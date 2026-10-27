@@ -124,7 +124,9 @@ def test_run_stage_is_idempotent_no_duplicate_alerts(conn):
 
     run_stage(ctx)
     run_stage(ctx)  # simulate accidental re-run
-    assert len(db.get_pending_alerts(conn)) == 1  # still just one, not two
+    alerts = db.get_pending_alerts(conn)
+    assert len(alerts) == 2  # one new-asset alert and one disappearance alert, not duplicates
+    assert {a["alert_type"] for a in alerts} == {"new_asset", "removed_asset"}
 
 
 def test_get_target_timeline_orders_oldest_first(conn):

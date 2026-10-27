@@ -40,13 +40,18 @@ COPY pyproject.toml README.md ./
 COPY marsadix marsadix
 RUN pip install --no-cache-dir .
 
-# --- verify the image actually has everything marsadix expects ---
-RUN marsadix doctor || true
+# --- verify the image actually has the external tools it promises ---
+RUN for tool in subfinder assetfinder chaos httpx katana dnsx naabu nuclei gau ffuf alterx massdns puredns amass findomain nmap; do \
+      command -v "$tool" >/dev/null 2>&1 || { echo "Missing required tool: $tool" >&2; exit 1; }; \
+    done && marsadix doctor
 
-# scans, databases and reports persist here -- mount a volume in `docker run`
-RUN mkdir -p /data
+# Run scans as an unprivileged user. Keep persistent data writable by that user.
+RUN useradd --system --create-home --home-dir /home/marsadix marsadix \
+    && mkdir -p /data \
+    && chown -R marsadix:marsadix /data /home/marsadix
 WORKDIR /data
 VOLUME ["/data"]
+USER marsadix
 
 ENTRYPOINT ["marsadix", "--db", "/data/marsadix.db"]
 CMD ["--help"]

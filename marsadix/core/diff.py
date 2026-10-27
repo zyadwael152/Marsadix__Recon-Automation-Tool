@@ -160,6 +160,17 @@ def run_stage(ctx) -> None:
                 log.info("track: new asset alert queued for %s", host)
         for host in gone_hosts:
             log.info("track: asset no longer seen: %s", host)
+            alert = Alert(
+                alert_type=AlertType.REMOVED_ASSET,
+                host=host,
+                title=f"Asset no longer discovered: {host}",
+                details=f"Not observed in scan #{cur_id}; this may reflect a temporary discovery/source failure and should be verified.",
+                priority=default_priority(AlertType.REMOVED_ASSET),
+                channel=AlertChannel.DISCORD,
+                dedup_key=f"removed_asset|{host}|scan:{cur_id}|discord",
+            )
+            if db.save_alert_if_new(conn, alert):
+                log.info("track: asset disappearance alert queued for %s", host)
 
     prev = _previous_scan(conn, target, cur_id)
     if prev is None:

@@ -93,9 +93,6 @@ async def bruteforce_subdomains(domain: str, wordlist_path: Optional[str] = None
         # التعديل الذكي: التحقق من مسار الـ resolvers أو التقاط الملف المحلي أوتوماتيك
         if resolvers_path and os.path.isfile(resolvers_path):
             res_file = resolvers_path
-        elif os.path.isfile("resolvers.txt"):
-            res_file = "resolvers.txt"
-            logger.info("[+] Using local trusted resolvers file: resolvers.txt")
         else:
             res_file = os.path.join(tmp, "resolvers.txt")
             with open(res_file, "w", encoding="utf-8") as fh:

@@ -19,6 +19,8 @@ log_warn() { echo -e "${YELLOW}[!] $1${RESET}"; }
 log_err()  { echo -e "${RED}[-] $1${RESET}"; }
 
 echo -e "${BLUE}[*] Starting Marsadix Dependencies Installer...${RESET}"
+INSTALL_TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/marsadix-install.XXXXXX") || exit 1
+trap 'rm -rf "$INSTALL_TMP_DIR"' EXIT
 
 # 1. Root check
 if [ "$EUID" -ne 0 ]; then
@@ -72,10 +74,10 @@ if need_fresh_go; then
         *) log_err "Unsupported architecture: $ARCH"; exit 1 ;;
     esac
     OS_NAME=$(uname -s | tr '[:upper:]' '[:lower:]')
-    if curl -fsSL "https://go.dev/dl/go${GO_TARBALL_VERSION}.${OS_NAME}-${GOARCH}.tar.gz" -o /tmp/go.tar.gz; then
+    GO_TARBALL="$INSTALL_TMP_DIR/go.tar.gz"
+    if curl -fsSL "https://go.dev/dl/go${GO_TARBALL_VERSION}.${OS_NAME}-${GOARCH}.tar.gz" -o "$GO_TARBALL"; then
         rm -rf /usr/local/go
-        tar -C /usr/local -xzf /tmp/go.tar.gz
-        rm -f /tmp/go.tar.gz
+        tar -C /usr/local -xzf "$GO_TARBALL"
     else
         log_err "Failed to download Go tarball."
     fi
@@ -106,7 +108,12 @@ done
 install_go_tool() {
     local name="$1" pkg="$2" logfile="/tmp/marsadix_${1}.log"
     log_info "Installing $name..."
-    if sudo -u "$REAL_USER" env PATH="$PATH" GOPATH="$GOPATH" go install -v "$pkg@latest" &>"$logfile"; then
+    if [ -n "${SUDO_USER:-}" ] && command -v sudo >/dev/null 2>&1; then
+        sudo -u "$REAL_USER" env PATH="$PATH" GOPATH="$GOPATH" go install -v "$pkg@latest" &>"$logfile"
+    else
+        env PATH="$PATH" GOPATH="$GOPATH" go install -v "$pkg@latest" &>"$logfile"
+    fi
+    if [ "$?" -eq 0 ]; then
         local bin="$GOPATH/bin/$name"
         if [ -x "$bin" ]; then
             cp -f "$bin" /usr/local/bin/ && { log_ok "$name installed."; return; }
@@ -149,19 +156,19 @@ if ! command -v findomain &>/dev/null; then
         *) FD_ASSET="" ;;
     esac
     FD_OK=0
-    if [ -n "$FD_ASSET" ] && curl -fsSL -o /tmp/findomain.zip \
+    FINDOMAIN_ZIP="$INSTALL_TMP_DIR/findomain.zip"
+    FINDOMAIN_EXTRACT="$INSTALL_TMP_DIR/findomain_extract"
+    if [ -n "$FD_ASSET" ] && curl -fsSL -o "$FINDOMAIN_ZIP" \
         "https://github.com/Findomain/Findomain/releases/latest/download/${FD_ASSET}"; then
-        if file /tmp/findomain.zip | grep -qi "Zip archive"; then
-            mkdir -p /tmp/findomain_extract
-            if unzip -q /tmp/findomain.zip -d /tmp/findomain_extract && \
-               [ -x /tmp/findomain_extract/findomain -o -f /tmp/findomain_extract/findomain ]; then
-                chmod +x /tmp/findomain_extract/findomain
-                mv /tmp/findomain_extract/findomain /usr/local/bin/findomain
+        if file "$FINDOMAIN_ZIP" | grep -qi "Zip archive"; then
+            mkdir -p "$FINDOMAIN_EXTRACT"
+            if unzip -q "$FINDOMAIN_ZIP" -d "$FINDOMAIN_EXTRACT" && \
+               [ -x "$FINDOMAIN_EXTRACT/findomain" -o -f "$FINDOMAIN_EXTRACT/findomain" ]; then
+                chmod +x "$FINDOMAIN_EXTRACT/findomain"
+                mv "$FINDOMAIN_EXTRACT/findomain" /usr/local/bin/findomain
                 FD_OK=1
             fi
-            rm -rf /tmp/findomain_extract
         fi
-        rm -f /tmp/findomain.zip
     fi
     [ "$FD_OK" -eq 1 ] && log_ok "findomain installed." || { FAILED+=("findomain"); log_err "findomain failed."; }
 else
@@ -187,3 +194,7 @@ else
 fi
 
 log_info "Open a NEW terminal (or run: source ${REAL_HOME}/.bashrc) so PATH changes take effect."
+if [ "${#FAILED[@]}" -gt 0 ]; then
+    log_err "Installer finished with missing tools: ${FAILED[*]}"
+    exit 1
+fi

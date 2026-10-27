@@ -109,11 +109,11 @@ async def fetch_shodan(domain: str, api_key: str = None) -> Tuple[str, Set[str]]
             for match in data.get('matches', []):
                 for host in match.get('hostnames', []):
                     host = host.strip().lower()
-                    if host.endswith(domain.lower()):
+                    if host == domain.lower().strip(".") or host.endswith("." + domain.lower().strip(".")):
                         subdomains.add(host)
         logger.info(f"[+] Shodan discovered {len(subdomains)} subdomains.")
     except Exception as e:
-        logger.warning(f"[-] Shodan error: {e}")
+        logger.warning("[-] Shodan request failed (%s); API key redacted.", type(e).__name__)
 
     return "shodan", subdomains
 
@@ -143,10 +143,39 @@ async def fetch_censys(domain: str, api_key: str = None) -> Tuple[str, Set[str]]
             for hit in data.get('result', {}).get('hits', []):
                 for name in hit.get('names', []):
                     name = name.strip().lower().lstrip('*.')
-                    if name.endswith(domain.lower()):
+                    if name == domain.lower().strip(".") or name.endswith("." + domain.lower().strip(".")):
                         subdomains.add(name)
         logger.info(f"[+] Censys discovered {len(subdomains)} subdomains.")
     except Exception as e:
         logger.warning(f"[-] Censys error: {e}")
 
     return "censys", subdomains
+
+
+async def fetch_securitytrails(domain: str, api_key: str = None) -> Tuple[str, Set[str]]:
+    """Query SecurityTrails' domain subdomain endpoint; skip cleanly without a key."""
+    subdomains: Set[str] = set()
+    if not api_key:
+        logger.info("[-] Skipped SecurityTrails (No API Key provided).")
+        return "securitytrails", subdomains
+
+    safe_domain = urllib.parse.quote(domain.lower().strip("."), safe=".-")
+    url = f"https://api.securitytrails.com/v1/domain/{safe_domain}/subdomains"
+    logger.info("[*] Querying SecurityTrails...")
+    try:
+        loop = asyncio.get_event_loop()
+        req = urllib.request.Request(url, headers={"APIKEY": api_key, "Accept": "application/json"})
+        response = await loop.run_in_executor(
+            None, partial(urllib.request.urlopen, req, timeout=HTTP_TIMEOUT))
+        if response.status == 200:
+            data = json.loads(response.read().decode(errors="replace"))
+            for label in data.get("subdomains", []):
+                label = str(label).strip().lower().strip(".")
+                if label and all(part and len(part) <= 63 for part in label.split(".")):
+                    subdomains.add(f"{label}.{domain.lower().strip('.')}" )
+        logger.info("[+] SecurityTrails discovered %d subdomains.", len(subdomains))
+    except urllib.error.HTTPError as e:
+        logger.warning("[-] SecurityTrails error: HTTP %s", e.code)
+    except Exception as e:
+        logger.warning("[-] SecurityTrails error: %s", e)
+    return "securitytrails", subdomains

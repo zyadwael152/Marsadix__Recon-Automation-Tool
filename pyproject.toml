@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Recon, ASM and CVE monitoring"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = []          # add real dependencies here (e.g. "requests", "jinja2")
+dependencies = ["websockets>=12,<16"]
 
 [project.optional-dependencies]
 dev = ["pytest"]

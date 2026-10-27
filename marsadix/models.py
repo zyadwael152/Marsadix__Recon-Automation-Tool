@@ -104,6 +104,7 @@ class AlertType(str, Enum):
     CVE = "cve"              # new CVE matches a stored technology
     NEW_ASSET = "new_asset"  # new subdomain discovered
     NEW_PORT = "new_port"
+    REMOVED_ASSET = "removed_asset"
     TAKEOVER = "takeover"    # possible subdomain takeover
 
 
@@ -382,6 +383,7 @@ def default_priority(alert_type: AlertType) -> AlertPriority:
     return {
         AlertType.NEW_ASSET: AlertPriority.MEDIUM,
         AlertType.NEW_PORT: AlertPriority.MEDIUM,
+        AlertType.REMOVED_ASSET: AlertPriority.LOW,
         AlertType.TAKEOVER: AlertPriority.HIGH,
         AlertType.CVE: AlertPriority.LOW,
     }[alert_type]

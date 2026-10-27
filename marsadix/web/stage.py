@@ -128,6 +128,21 @@ def run(ctx, *args, **kwargs) -> dict:
     live = [r for r in live if not (r.get("ip") and netguard.blocked_reason(r["ip"], ctx.scope))]
     live_urls = [r["url"] for r in live]
 
+    # Recon stores the base source+DNS confidence. This is the only HTTP probe
+    # in the pipeline, so apply the HTTP bonus here rather than running httpx a
+    # second time inside the Recon stage.
+    from ..recon.confidence import compute_source_confidence
+    source_map = {a["host"]: db.get_asset_sources(ctx.conn, scan_id, a["host"])
+                  for a in assets}
+    scores = compute_source_confidence(source_map, {
+        normalize_host(r["url"]) for r in live if normalize_host(r["url"])
+    })
+    for host, score in scores.items():
+        ctx.conn.execute(
+            "UPDATE assets SET confidence_score=? WHERE scan_id=? AND host=?",
+            (score, scan_id, host))
+    ctx.conn.commit()
+
     endpoints: List[str] = []
     if live_urls and ctx.allows("full"):
         seen = {_canonical(u) for u in live_urls}           # the roots are already stored as live URLs

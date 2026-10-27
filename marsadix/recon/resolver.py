@@ -40,12 +40,18 @@ GENERATED_SOURCES = frozenset({"alterx", "permutation", "puredns", "wordlist"})
 
 
 async def _lookup_all(host: str) -> List[str]:
-    """All A records for host via the OS resolver, or [] if it doesn't resolve."""
+    """All IPv4 and IPv6 addresses for host via the OS resolver, or []."""
     loop = asyncio.get_event_loop()
     try:
-        _, _, ips = await asyncio.wait_for(
-            loop.run_in_executor(None, socket.gethostbyname_ex, host), timeout=DNS_TIMEOUT)
-        return list(ips)
+        records = await asyncio.wait_for(
+            loop.run_in_executor(None, socket.getaddrinfo, host, None, 0, socket.SOCK_STREAM),
+            timeout=DNS_TIMEOUT)
+        ips = []
+        for record in records:
+            address = record[4][0]
+            if address not in ips:
+                ips.append(address)
+        return ips
     except Exception:
         return []
 
@@ -68,7 +74,8 @@ def parse_dnsx_json(text: str) -> Dict[str, dict]:
         except ValueError:
             continue
         host = (data.get("host") or "").strip().lower().rstrip(".")
-        ips = [ip for ip in (data.get("a") or []) if ip]
+        # dnsx can return A and AAAA in separate arrays; keep both address families.
+        ips = [ip for ip in (data.get("a") or []) + (data.get("aaaa") or []) if ip]
         if not host or not ips:
             continue
         entry = out.setdefault(host, {"ips": [], "cname": []})
@@ -87,7 +94,7 @@ async def resolve_with_dnsx(hosts: List[str], rate_limit: Optional[int] = None,
     """None means dnsx is unavailable/failed - caller falls back to sockets."""
     if not hosts:
         return {}
-    cmd = ["dnsx", "-silent", "-a", "-cname", "-json"]
+    cmd = ["dnsx", "-silent", "-a", "-aaaa", "-cname", "-json"]
     if rate_limit:
         cmd += ["-rl", str(int(rate_limit))]
     out = await run_async(cmd, stdin_lines=hosts, timeout=timeout, name="dnsx")

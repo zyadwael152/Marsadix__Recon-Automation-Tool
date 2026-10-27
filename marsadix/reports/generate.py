@@ -598,6 +598,21 @@ body.engagement .engagement-only { display:table-cell; }
 .legend-item i { width:9px; height:9px; border-radius:50%; display:inline-block; }
 """
 
+def _assets_section(data: dict) -> str:
+    assets = data.get("assets") or []
+    if not assets:
+        return ""
+    return f'''
+  <section class="engagement-only" style="display:block">
+    <h2>Assets</h2>
+    <table>
+      <thead><tr><th>Host</th><th>IP</th><th>In scope</th><th>Source confidence</th><th>ASN</th><th>CDN</th></tr></thead>
+      <tbody>{_assets_rows(assets)}</tbody>
+    </table>
+  </section>
+'''
+
+
 _JS = """
 function toggleTheme() {
   const root = document.documentElement;
@@ -705,13 +720,7 @@ def _render_html(data: dict) -> str:
     </table>
   </section>
 
-  <section class="engagement-only" style="display:block">
-    <h2>Assets</h2>
-    <table>
-      <thead><tr><th>Host</th><th>IP</th><th>In scope</th><th>Source confidence</th><th>ASN</th><th>CDN</th></tr></thead>
-      <tbody>{_assets_rows(data['assets'])}</tbody>
-    </table>
-  </section>
+  {_assets_section(data)}
 
   <section>
     <h2>Methodology &amp; limitations</h2>

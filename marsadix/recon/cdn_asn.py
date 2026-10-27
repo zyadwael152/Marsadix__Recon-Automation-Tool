@@ -30,9 +30,12 @@ LOOKUP_TIMEOUT = 20  # seconds for the whole bulk query
 
 # Substring match against the ASN owner / AS name (lowercase).
 KNOWN_CDN_MARKERS = [
-    "cloudflare", "akamai", "fastly", "amazon", "cloudfront", "incapsula",
-    "imperva", "sucuri", "stackpath", "edgecast", "google", "azure",
-    "microsoft", "limelight", "cdn77", "keycdn", "bunny", "maxcdn",
+    # Keep this list to CDN products/providers, not general cloud/hosting ASNs.
+    # Broad tokens such as "amazon", "google", "azure" and "microsoft" mark
+    # ordinary cloud-hosted origins as CDNs and suppress useful port scans.
+    "cloudflare", "akamai", "fastly", "cloudfront", "incapsula",
+    "imperva", "sucuri", "stackpath", "edgecast", "limelight",
+    "cdn77", "keycdn", "bunnycdn", "bunny cdn", "maxcdn", "cachefly",
 ]
 
 

@@ -45,14 +45,19 @@ async def run_naabu(hosts: List[str], rate_limit: Optional[int] = None) -> Dict[
             stderr=asyncio.subprocess.PIPE,
         )
         input_data = "\n".join(hosts).encode()
+        communicate_task = asyncio.create_task(process.communicate(input=input_data))
         try:
-            stdout, _ = await asyncio.wait_for(
-                process.communicate(input=input_data), timeout=NAABU_TIMEOUT)
+            stdout, _ = await asyncio.wait_for(asyncio.shield(communicate_task), timeout=NAABU_TIMEOUT)
         except asyncio.TimeoutError:
             process.kill()
             await process.wait()
-            logger.warning(f"[-] naabu timed out after {NAABU_TIMEOUT}s - using whatever was found so far.")
-            stdout = b""
+            # Keep stdout collected before timeout; cancelling communicate() here
+            # used to discard every partial result while the log claimed otherwise.
+            try:
+                stdout, _ = await communicate_task
+            except Exception:
+                stdout = b""
+            logger.warning(f"[-] naabu timed out after {NAABU_TIMEOUT}s - keeping partial results.")
 
         for line in stdout.decode(errors="replace").splitlines():
             try:
@@ -79,6 +84,9 @@ def _parse_nmap_xml(xml_text: str) -> List[dict]:
     Pure stdlib xml.etree, no new dependency.
     """
     entries: List[dict] = []
+    if "<!ENTITY" in xml_text.upper():
+        logger.warning("[-] nmap XML contains entity declarations: ignored")
+        return entries
     try:
         root = ET.fromstring(xml_text)
     except ET.ParseError as e:
@@ -113,7 +121,7 @@ def _parse_nmap_xml(xml_text: str) -> List[dict]:
     return entries
 
 
-async def run_nmap(host_ports: Dict[str, List[int]]) -> Dict[str, List[dict]]:
+async def run_nmap(host_ports: Dict[str, List[int]], rate_limit: Optional[int] = None) -> Dict[str, List[dict]]:
     """
     Service/version detection + CPE (R11) for hosts naabu found open ports
     on. One nmap process per host (nmap has no clean way to give different
@@ -130,8 +138,11 @@ async def run_nmap(host_ports: Dict[str, List[int]]) -> Dict[str, List[dict]]:
             continue
         port_list = ",".join(str(p) for p in sorted(set(ports)))
         try:
+            cmd = ["nmap", "-sV", "-Pn", "-p", port_list, "-oX", "-", host]
+            if rate_limit:
+                cmd[1:1] = ["--max-rate", str(int(rate_limit))]
             process = await asyncio.create_subprocess_exec(
-                "nmap", "-sV", "-Pn", "-p", port_list, "-oX", "-", host,
+                *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
