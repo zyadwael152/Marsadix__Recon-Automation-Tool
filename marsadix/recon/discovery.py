@@ -30,13 +30,19 @@ async def run_cli_tool(tool_name: str, command: List[str], timeout: int = 120,
             stderr=asyncio.subprocess.PIPE,
             env=child_env,
         )
+        communicate_task = asyncio.create_task(process.communicate())
         try:
-            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=timeout)
+            stdout, _ = await asyncio.wait_for(asyncio.shield(communicate_task), timeout=timeout)
         except asyncio.TimeoutError:
+            # Keep communicate alive to drain pipes, kill the process, then retain
+            # anything written before the timeout instead of silently losing it.
             process.kill()
             await process.wait()
-            logger.warning(f"[-] {tool_name} timed out after {timeout}s - skipped.")
-            return tool_name, subdomains
+            try:
+                stdout, _ = await communicate_task
+            except Exception:
+                stdout = b""
+            logger.warning(f"[-] {tool_name} timed out after {timeout}s; preserving partial output.")
 
         if stdout:
             for line in stdout.decode(errors="replace").splitlines():
@@ -126,10 +132,10 @@ async def _async_discover_recursive(domain: str, api_keys: dict, max_depth: int)
         
         # حماية إضافية: لو عدد الأهداف تجاوز 100 في العمق التاني، نكتفي بهم لمنع الـ Explosion
         if len(targets_to_scan) > 100:
-            logger.warning(f"[-] Target list exceeded 100 items at depth {depth}. Limiting recursion batch to top 100.")
-            targets_to_scan = set(list(targets_to_scan)[:100])
+            logger.warning(f"[-] Target list exceeded 100 items at depth {depth}. Limiting recursion batch to first 100 sorted targets.")
+            targets_to_scan = set(sorted(targets_to_scan)[:100])
 
-        tasks = [_async_discover_single(t, api_keys) for t in targets_to_scan]
+        tasks = [_async_discover_single(t, api_keys) for t in sorted(targets_to_scan)]
         batch_results = await asyncio.gather(*tasks)
         
         scanned_targets.update(targets_to_scan)
