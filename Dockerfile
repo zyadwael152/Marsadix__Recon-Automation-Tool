@@ -25,11 +25,11 @@ WORKDIR /opt/marsadix
 
 # --- OS packages: build/runtime deps for the installer script + nmap/naabu ---
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl unzip tar ca-certificates \
+        curl unzip tar ca-certificates gcc libc6-dev \
         nmap libpcap-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# --- external recon tools (Go binaries fetched from their GitHub releases) ---
+# --- external recon tools (built with `go install`, see install-tools.sh) ---
 # Copied in before the rest of the source so this layer is cached across
 # ordinary code changes -- only rebuilds when install-tools.sh itself changes.
 COPY scripts/install-tools.sh scripts/install-tools.sh

@@ -28,6 +28,17 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
+# Where the binaries go. The Dockerfile passes /usr/local/bin explicitly;
+# local runs use the same default. The old script ignored its argument and
+# always wrote to /usr/local/bin, so a custom install dir was silently lost.
+INSTALL_DIR="${1:-/usr/local/bin}"
+case "$INSTALL_DIR" in
+    /*) ;;
+    *) log_err "Install directory must be an absolute path: $INSTALL_DIR"; exit 1 ;;
+esac
+mkdir -p "$INSTALL_DIR"
+export PATH="$PATH:$INSTALL_DIR"
+
 # 2. Detect package manager instead of assuming apt
 if command -v apt &>/dev/null; then
     PKG_INSTALL="apt install -y"
@@ -48,7 +59,7 @@ fi
 
 log_info "Updating system and installing base prerequisites..."
 $PKG_UPDATE
-$PKG_INSTALL curl wget git unzip file python3 python3-venv python3-pip || log_warn "Some base packages may have failed to install"
+$PKG_INSTALL curl wget git unzip file python3 python3-venv python3-pip nmap || log_warn "Some base packages may have failed to install"
 
 # 3. Go: make sure a recent-enough version is present.
 MIN_GO_MINOR=21
@@ -88,7 +99,10 @@ fi
 export PATH=$PATH:/usr/local/go/bin
 
 REAL_USER="${SUDO_USER:-$USER}"
-REAL_HOME=$(eval echo "~$REAL_USER")
+# No `eval echo "~$REAL_USER"`: SUDO_USER is environment-controlled, and eval
+# would execute shell metacharacters in it. Read the passwd entry instead.
+REAL_HOME=$(getent passwd "$REAL_USER" 2>/dev/null | cut -d: -f6)
+[ -n "$REAL_HOME" ] || REAL_HOME="$HOME"
 export GOPATH="$REAL_HOME/go"
 export PATH=$PATH:$GOPATH/bin
 
@@ -116,7 +130,7 @@ install_go_tool() {
     if [ "$?" -eq 0 ]; then
         local bin="$GOPATH/bin/$name"
         if [ -x "$bin" ]; then
-            cp -f "$bin" /usr/local/bin/ && { log_ok "$name installed."; return; }
+            cp -f "$bin" "$INSTALL_DIR/" && { log_ok "$name installed."; return; }
         fi
     fi
     FAILED+=("$name")
@@ -136,15 +150,10 @@ install_go_tool ffuf        github.com/ffuf/ffuf/v2
 install_go_tool alterx      github.com/projectdiscovery/alterx/cmd/alterx
 install_go_tool massdns     github.com/blechschmidt/massdns/bin/massdns
 install_go_tool puredns     github.com/d3mondev/puredns/v2/cmd/puredns
-
-# 6. Amass via the system package manager
-log_info "Installing Amass..."
-if $PKG_INSTALL amass &>/tmp/marsadix_amass.log && command -v amass &>/dev/null; then
-    log_ok "amass installed."
-else
-    FAILED+=("amass")
-    log_err "amass failed via package manager."
-fi
+# `apt install amass` does not exist on Debian/Ubuntu (it is a Kali package),
+# which made the Docker build fail its tool check. Install it like the other
+# Go tools instead of relying on the distro package manager.
+install_go_tool amass       github.com/owasp-amass/amass/v4/cmd/amass
 
 # 7. Findomain
 log_info "Installing Findomain..."
@@ -165,7 +174,7 @@ if ! command -v findomain &>/dev/null; then
             if unzip -q "$FINDOMAIN_ZIP" -d "$FINDOMAIN_EXTRACT" && \
                [ -x "$FINDOMAIN_EXTRACT/findomain" -o -f "$FINDOMAIN_EXTRACT/findomain" ]; then
                 chmod +x "$FINDOMAIN_EXTRACT/findomain"
-                mv "$FINDOMAIN_EXTRACT/findomain" /usr/local/bin/findomain
+                mv "$FINDOMAIN_EXTRACT/findomain" "$INSTALL_DIR/findomain"
                 FD_OK=1
             fi
         fi
@@ -178,7 +187,7 @@ fi
 # 8. Final report
 echo ""
 echo -e "${BLUE}=== Installation report ===${RESET}"
-for t in subfinder assetfinder chaos httpx katana dnsx naabu nuclei gau ffuf alterx massdns puredns amass findomain; do
+for t in subfinder assetfinder chaos httpx katana dnsx naabu nuclei gau ffuf alterx massdns puredns amass findomain nmap; do
     if command -v "$t" &>/dev/null; then
         echo -e "  ${GREEN}[OK]${RESET}    $t"
     else

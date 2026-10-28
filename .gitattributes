@@ -1,0 +1,21 @@
+# Keep text files LF in the repository and in the working tree.
+# A CRLF shell script fails on Linux with "syntax error near unexpected
+# token" (or a bare "elif" / "else"), which is exactly what happened before.
+* text=auto eol=lf
+*.sh text eol=lf
+Dockerfile text eol=lf
+
+# Windows-only scripts are fine either way, but keep them native for
+# PowerShell 5.1 users who open them in Notepad.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary fixtures must never be line-ending converted.
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.zip binary
+*.gz binary
+*.db binary
