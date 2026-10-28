@@ -110,7 +110,7 @@ async def _async_discover_single(domain: str, api_keys: dict) -> Dict[str, List[
         fetch_alienvault(domain, otx_key),
         fetch_virustotal(domain, vt_key),
         fetch_shodan(domain, shodan_key),
-        fetch_censys(domain, censys_key)),
+        fetch_censys(domain, censys_key),
     ]
     results = await asyncio.gather(*tasks)
     tool_outputs = {tool_name: subs for tool_name, subs in results}
