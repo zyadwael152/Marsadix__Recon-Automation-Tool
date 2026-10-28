@@ -37,7 +37,7 @@ from ..core.scope import normalize_host
 from ..core.textfile import safe_filename
 from ..models import Confidence, DiscoverySource, Technology, WebItem, WebItemKind
 from . import fingerprint
-from .probe import run_httpx, run_katana
+from .probe import run_gau, run_httpx, run_katana
 
 logger = logging.getLogger(__name__)
 
@@ -87,13 +87,40 @@ def _technologies(scan_id: int, host: str, record: dict) -> List[Technology]:
 def run(ctx, *args, **kwargs) -> dict:
     logger.info("=== Starting Web stage (mode: %s) ===", ctx.mode)
 
-    if not ctx.allows("standard"):
-        reason = (f"mode '{ctx.mode}' makes no contact with the target "
-                  f"(use --mode standard or full to probe it)")
-        logger.info("[-] Web stage skipped: %s", reason)
-        return {"skipped": reason, "live_urls": [], "endpoints": []}
-
     scan_id = ctx.scan.id
+
+    # gau queries public archive providers and does not crawl the target. Run it
+    # even in passive mode, but store only URLs whose hosts are in the explicit
+    # scope. None means gau is not installed; [] means it ran without results.
+    gau_result = asyncio.run(run_gau(ctx.target, timeout=ctx.config.tool_timeout))
+    archived_urls = _scoped(ctx, gau_result or [])
+    archived_items = []
+    for url in archived_urls:
+        parts = urlsplit(url)
+        is_js = parts.path.lower().endswith((".js", ".mjs"))
+        is_root = parts.path in ("", "/") and not parts.query
+        kind = WebItemKind.JS_FILE if is_js else (WebItemKind.URL if is_root else WebItemKind.ENDPOINT)
+        archived_items.append(WebItem(
+            scan_id=scan_id, host=normalize_host(url) or parts.netloc, url=url,
+            kind=kind, source=DiscoverySource.PASSIVE, has_params=bool(parts.query)))
+    archived_stored = db.save_many(ctx.conn, "web_items", archived_items) if archived_items else 0
+    out_dir = ctx.config.output_dir
+    os.makedirs(out_dir, exist_ok=True)
+    stem = safe_filename(ctx.target)
+    if archived_urls:
+        _write_lines(os.path.join(out_dir, f"{stem}_archived_urls.txt"), archived_urls)
+
+    if not ctx.allows("standard"):
+        if gau_result is None:
+            reason = (f"mode '{ctx.mode}' makes no contact with the target; gau is not installed, "
+                      "so archived URL collection was skipped")
+            logger.info("[-] Web stage skipped: %s", reason)
+            return {"skipped": reason, "live_urls": [], "endpoints": [],
+                    "archived_urls": [], "archived_stored": 0}
+        logger.info("[+] Passive archived URL collection stored %d item(s).", archived_stored)
+        return {"live_urls": [], "endpoints": [], "archived_urls": archived_urls,
+                "archived_stored": archived_stored}
+
     assets = db.get_assets(ctx.conn, scan_id)
     all_hosts = {a["host"] for a in assets}
     hosts = sorted({a["host"] for a in assets if a["in_scope"] and ctx.in_scope(a["host"])})
@@ -185,4 +212,5 @@ def run(ctx, *args, **kwargs) -> dict:
         _write_lines(os.path.join(out_dir, f"{stem}_endpoints.txt"), endpoints)
 
     return {"live_urls": live_urls, "endpoints": endpoints, "stored": stored,
-            "technologies": tech_stored}
+            "technologies": tech_stored, "archived_urls": archived_urls,
+            "archived_stored": archived_stored}

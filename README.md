@@ -190,7 +190,7 @@ These are candidate building blocks from the project plan; integrations may chan
 | Passive discovery | [Subfinder](https://github.com/projectdiscovery/subfinder), [OWASP Amass](https://github.com/owasp-amass/amass), [crt.sh](https://crt.sh/), [Wayback Machine](https://web.archive.org/) |
 | DNS / resolution | [dnsx](https://github.com/projectdiscovery/dnsx), CDN detection, ASN ownership lookup |
 | Ports / services | [Naabu](https://github.com/projectdiscovery/naabu), [Nmap](https://nmap.org/), [httpx](https://github.com/projectdiscovery/httpx) |
-| URLs / JS / endpoints | [katana](https://github.com/projectdiscovery/katana), [gau](https://github.com/lc/gau), JavaScript endpoint extractors such as [jsluice](https://github.com/BishopFox/jsluice) or LinkFinder |
+| URLs / JS / endpoints | [gau](https://github.com/lc/gau) for passive archived URLs (scope-filtered and stored in `web_items`); [katana](https://github.com/projectdiscovery/katana) for active crawling in `full` mode; JavaScript endpoint extractors such as [jsluice](https://github.com/BishopFox/jsluice) or LinkFinder remain future integrations |
 | Technology detection | httpx technology detection, Wappalyzer-style rules, [retire.js](https://retirejs.github.io/retire.js/) data for JavaScript libraries |
 | Emails (public sources) | [theHarvester](https://github.com/laramies/theHarvester) or similar OSINT sources |
 | Web verification | [Nuclei](https://github.com/projectdiscovery/nuclei) |

@@ -97,6 +97,86 @@ async def _communicate_with_partial(process, input_data: bytes, timeout: int):
     return b"".join(stdout_parts), b"".join(stderr_parts), timed_out
 
 
+GAU_MAX_URLS = 100_000
+GAU_MAX_OUTPUT_BYTES = 20 * 1024 * 1024
+
+
+async def run_gau(domain: str, timeout: int = 180) -> Optional[List[str]]:
+    """Collect archived URLs passively with gau. None means the binary is absent.
+
+    Output is streamed and bounded so a very large archive result cannot consume
+    unbounded memory. gau queries archive providers; it does not crawl the target.
+    """
+    import shutil
+    from urllib.parse import urlsplit, urlunsplit
+
+    if shutil.which("gau") is None:
+        logger.info("[-] gau is not installed - archived URL collection skipped.")
+        return None
+
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "gau", domain, "--subs", "--threads", "5", "--timeout", "30", "--retries", "2",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            limit=1024 * 1024,
+        )
+    except Exception as exc:
+        logger.warning("[-] Could not start gau: %s", type(exc).__name__)
+        return []
+
+    urls = set()
+    output_bytes = 0
+    truncated = False
+
+    async def collect():
+        nonlocal output_bytes, truncated
+        assert process.stdout is not None
+        while True:
+            line = await process.stdout.readline()
+            if not line:
+                break
+            output_bytes += len(line)
+            if output_bytes > GAU_MAX_OUTPUT_BYTES or len(urls) >= GAU_MAX_URLS:
+                truncated = True
+                with suppress(ProcessLookupError):
+                    process.kill()
+                break
+            raw = line.decode("utf-8", errors="replace").strip()
+            if not raw or len(raw) > 16_384:
+                continue
+            try:
+                parts = urlsplit(raw)
+                host = parts.hostname
+                if parts.scheme.lower() not in {"http", "https"} or not host:
+                    continue
+                if parts.username or parts.password:
+                    continue
+                # Drop fragments: they are client-side and do not identify a
+                # distinct HTTP resource. Keep query strings as endpoint evidence.
+                normalized = urlunsplit((parts.scheme.lower(), parts.netloc.lower(),
+                                         parts.path or "/", parts.query, ""))
+                urls.add(normalized)
+            except ValueError:
+                continue
+
+    try:
+        await asyncio.wait_for(collect(), timeout=max(1, int(timeout)))
+    except asyncio.TimeoutError:
+        truncated = True
+        with suppress(ProcessLookupError):
+            process.kill()
+    finally:
+        with suppress(Exception):
+            await asyncio.wait_for(process.wait(), timeout=5)
+
+    if truncated:
+        logger.warning("[-] gau output was bounded by timeout/size limits; retaining %d URL(s).", len(urls))
+    elif process.returncode not in (0, None):
+        logger.warning("[-] gau exited with code %s; retaining %d URL(s).", process.returncode, len(urls))
+    logger.info("[+] gau collected %d archived URL(s).", len(urls))
+    return sorted(urls)
+
+
 async def run_httpx(domains: List[str], rate_limit: Optional[int] = None,
                     timeout: int = 300) -> List[dict]:
     """

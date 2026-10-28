@@ -24,7 +24,7 @@ def conn():
 @pytest.fixture
 def calls(monkeypatch):
     """Fake httpx/katana. httpx 'finds' every host alive and returns its URL."""
-    rec = {"httpx": [], "katana": [], "rates": [], "timeouts": []}
+    rec = {"httpx": [], "katana": [], "gau": [], "rates": [], "timeouts": []}
 
     async def fake_httpx(hosts, rate_limit=None, timeout=None):
         rec["httpx"].append(list(hosts))
@@ -41,8 +41,13 @@ def calls(monkeypatch):
                 + [f"{u}/search?q=1" for u in urls] + list(urls)
                 + ["https://evil.com/leak", "https://dev.example.com/admin"])
 
+    async def fake_gau(domain, timeout=180):
+        rec["gau"].append((domain, timeout))
+        return None  # no archive provider/network calls in ordinary unit tests
+
     monkeypatch.setattr(web_stage, "run_httpx", fake_httpx)
     monkeypatch.setattr(web_stage, "run_katana", fake_katana)
+    monkeypatch.setattr(web_stage, "run_gau", fake_gau)
     return rec
 
 
@@ -68,6 +73,27 @@ def test_passive_mode_never_touches_the_target(conn, tmp_path, calls):
 
     assert calls["httpx"] == [] and calls["katana"] == []
     assert "makes no contact with the target" in out["skipped"]
+
+
+def test_gau_archived_urls_are_stored_only_when_in_scope(conn, tmp_path, calls, monkeypatch):
+    async def fake_gau(domain, timeout=180):
+        return [
+            "https://www.example.com/old-login?next=%2F",
+            "https://evil.com/out-of-scope",
+            "javascript:alert(1)",
+            "https://dev.example.com/admin",
+        ]
+
+    monkeypatch.setattr(web_stage, "run_gau", fake_gau)
+    out = web_stage.run(_ctx(conn, tmp_path, "passive"))
+
+    assert out["archived_urls"] == ["https://www.example.com/old-login?next=%2F"]
+    rows = db.get_web_items(conn, 1)
+    assert len(rows) == 1
+    assert rows[0]["source"] == "passive"
+    assert rows[0]["kind"] == "endpoint"
+    assert calls["httpx"] == [] and calls["katana"] == []
+    assert (tmp_path / "out" / "example.com_archived_urls.txt").read_text().splitlines() == out["archived_urls"]
 
 
 def test_standard_mode_probes_but_does_not_crawl(conn, tmp_path, calls):
