@@ -21,21 +21,21 @@ def _extract_api_keys(ctx) -> dict:
     cfg = getattr(ctx, "config", None)
     if cfg is not None:
         return {
-            "virustotal": getattr(cfg, "virustotal_api_key", "") or None,
-            "chaos": getattr(cfg, "chaos_api_key", "") or None,
-            "alienvault": getattr(cfg, "otx_api_key", "") or None,
-            "shodan": getattr(cfg, "shodan_api_key", "") or None,
-            "censys": getattr(cfg, "censys_api_key", "") or None,
+            "virustotal": getattr(cfg, "VIRUSTOTAL_API_KEY", "") or None,
+            "chaos": getattr(cfg, "CHAOS_API_KEY", "") or None,
+            "alienvault": getattr(cfg, "OTX_API_KEY", "") or None,
+            "shodan": getattr(cfg, "SHODAN_API_KEY", "") or None,
+            "censys": getattr(cfg, "CENSYS_API_KEY", "") or None,
         }
     if isinstance(ctx, dict) and "config" in ctx:
         c = ctx["config"]
         get = (lambda k: c.get(k)) if isinstance(c, dict) else (lambda k: getattr(c, k, None))
         return {
-            "virustotal": get("virustotal_api_key"),
-            "chaos": get("chaos_api_key"),
-            "alienvault": get("otx_api_key"),
-            "shodan": get("shodan_api_key"),
-            "censys": get("censys_api_key"),
+            "virustotal": get("VIRUSTOTAL_API_KEY"),
+            "chaos": get("CHAOS_API_KEY"),
+            "alienvault": get("OTX_API_KEY"),
+            "shodan": get("SHODAN_API_KEY"),
+            "censys": get("CENSYS_API_KEY"),
         }
     return {}
 
