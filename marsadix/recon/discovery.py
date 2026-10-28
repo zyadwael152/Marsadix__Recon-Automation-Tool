@@ -6,7 +6,7 @@ import re
 import urllib.request
 from functools import partial
 from typing import Set, List, Dict, Tuple
-from .api_sources import HTTP_TIMEOUT, fetch_virustotal, fetch_alienvault, fetch_shodan, fetch_censys, fetch_securitytrails
+from .api_sources import HTTP_TIMEOUT, fetch_virustotal, fetch_alienvault, fetch_shodan, fetch_censys
 from .merger import merge_and_track
 
 logger = logging.getLogger(__name__)
@@ -63,7 +63,7 @@ async def run_chaos(domain: str, api_key: str = None) -> Tuple[str, Set[str]]:
     # ProjectDiscovery supports PDCP_API_KEY via environment; don't put secrets
     # in argv, where process listings can expose them to other local users.
     return await run_cli_tool("chaos", ["chaos", "-d", domain, "-silent"],
-                              env_overrides={"PDCP_API_KEY": api_key})
+                              env_overrides={"CHAOS_API_KEY": api_key})
 
 async def fetch_crtsh(domain: str) -> Tuple[str, Set[str]]:
     subdomains = set()
@@ -110,8 +110,7 @@ async def _async_discover_single(domain: str, api_keys: dict) -> Dict[str, List[
         fetch_alienvault(domain, otx_key),
         fetch_virustotal(domain, vt_key),
         fetch_shodan(domain, shodan_key),
-        fetch_censys(domain, censys_key),
-        fetch_securitytrails(domain, api_keys.get("securitytrails")),
+        fetch_censys(domain, censys_key)),
     ]
     results = await asyncio.gather(*tasks)
     tool_outputs = {tool_name: subs for tool_name, subs in results}
