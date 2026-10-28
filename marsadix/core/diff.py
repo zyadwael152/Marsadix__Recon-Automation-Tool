@@ -120,7 +120,10 @@ def get_target_timeline(conn, target: str) -> list[dict]:
 def _previous_scan(conn, target: str, exclude_scan_id: int) -> Optional[dict]:
     """The most recent COMPLETED scan of `target` before `exclude_scan_id`."""
     row = conn.execute(
-        "SELECT * FROM scans WHERE target=? AND id<>? AND status='completed' "
+        # `id < ?` (not `id <> ?`): the predecessor must be strictly older.
+        # `id <> ?` could return a scan that started *after* exclude_scan_id,
+        # producing a reversed diff and corrupting trend/report comparisons.
+        "SELECT * FROM scans WHERE target=? AND id<? AND status='completed' "
         "ORDER BY started_at DESC, id DESC LIMIT 1",
         (target, exclude_scan_id)).fetchone()
     return dict(row) if row else None

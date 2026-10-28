@@ -81,6 +81,16 @@ def test_scans_started_in_the_same_second_are_ordered_by_id(conn):
     assert [t["scan_id"] for t in get_target_timeline(conn, "example.com")] == [old.id, new.id]
 
 
+def test_previous_scan_is_strictly_earlier_never_a_newer_scan(conn):
+    """`id <> ?` could select a scan started after the current one."""
+    old = _mk_scan(conn, "example.com", is_baseline=True)
+    current = _mk_scan(conn, "example.com")
+    _mk_scan(conn, "example.com")                  # newer: must never be "previous"
+
+    from marsadix.core.diff import _previous_scan
+    assert _previous_scan(conn, "example.com", current.id)["id"] == old.id
+
+
 def test_old_only_compares_with_the_next_scan(conn, capsys):
     first = _mk_scan(conn, "example.com", is_baseline=True)
     second = _mk_scan(conn, "example.com")

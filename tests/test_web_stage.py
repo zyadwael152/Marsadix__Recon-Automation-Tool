@@ -24,16 +24,18 @@ def conn():
 @pytest.fixture
 def calls(monkeypatch):
     """Fake httpx/katana. httpx 'finds' every host alive and returns its URL."""
-    rec = {"httpx": [], "katana": [], "rates": []}
+    rec = {"httpx": [], "katana": [], "rates": [], "timeouts": []}
 
-    async def fake_httpx(hosts, rate_limit=None):
+    async def fake_httpx(hosts, rate_limit=None, timeout=None):
         rec["httpx"].append(list(hosts))
         rec["rates"].append(("httpx", rate_limit))
+        rec["timeouts"].append(("httpx", timeout))
         return [{"url": f"https://{h}", "status_code": 200} for h in hosts]
 
-    async def fake_katana(urls, rate_limit=None):
+    async def fake_katana(urls, rate_limit=None, timeout=None):
         rec["katana"].append(list(urls))
         rec["rates"].append(("katana", rate_limit))
+        rec["timeouts"].append(("katana", timeout))
         # a crawler follows links to hosts that were never in its input
         return ([f"{u}/login" for u in urls] + [f"{u}/static/app.js" for u in urls]
                 + [f"{u}/search?q=1" for u in urls] + list(urls)
@@ -178,6 +180,15 @@ def test_scan_rate_limit_is_passed_to_both_tools(conn, tmp_path, calls):
     assert calls["rates"] == [("httpx", 25), ("katana", 25)]
 
 
+def test_configured_tool_timeout_is_passed_to_both_tools(conn, tmp_path, calls):
+    ctx = _ctx(conn, tmp_path, "full")
+    ctx.config.tool_timeout = 42
+
+    web_stage.run(ctx)
+
+    assert calls["timeouts"] == [("httpx", 42), ("katana", 42)]
+
+
 def test_cli_rate_flag_reaches_the_tools_through_the_pipeline(tmp_path, pipeline, calls):
     cfg = Config(db_path=str(tmp_path / "t.db"), output_dir=str(tmp_path / "out"), rate_limit=50)
     run_scan("example.com", cfg, mode="full", rate_limit=3,
@@ -251,7 +262,7 @@ def test_stored_items_appear_in_the_json_report(conn, tmp_path, calls):
 @pytest.fixture
 def rich(monkeypatch):
     """httpx answers with realistic records (technologies, Server header, IP, CDN)."""
-    async def fake_httpx(hosts, rate_limit=None):
+    async def fake_httpx(hosts, rate_limit=None, timeout=None):
         return [
             {"url": "https://www.example.com", "input": "www.example.com", "status_code": 200, "ip": "93.184.216.34",
              "webserver": "nginx/1.18.0 (Ubuntu)", "tech": ["Nginx:1.18.0", "PHP:8.1.2", "HSTS", "jQuery:3.6.0"],
@@ -359,13 +370,13 @@ def test_a_host_that_answers_from_an_internal_address_is_discarded_and_not_crawl
     """The name resolved to a public IP for recon but to 10.0.0.5 when httpx asked (DNS can change between lookups)."""
     crawled = []
 
-    async def fake_httpx(hosts, rate_limit=None):
+    async def fake_httpx(hosts, rate_limit=None, timeout=None):
         return [{"url": "https://www.example.com", "input": "www.example.com", "status_code": 200, "ip": "10.0.0.5",
                  "webserver": "nginx/1.18.0", "tech": ["Nginx:1.18.0"], "cdn": False, "cdn_name": None},
                 {"url": "https://api.example.com", "input": "api.example.com", "status_code": 200, "ip": "93.184.216.34",
                  "webserver": None, "tech": ["PHP:8.1.2"], "cdn": False, "cdn_name": None}]
 
-    async def fake_katana(urls, rate_limit=None):
+    async def fake_katana(urls, rate_limit=None, timeout=None):
         crawled.extend(urls)
         return []
     monkeypatch.setattr(web_stage, "run_httpx", fake_httpx)

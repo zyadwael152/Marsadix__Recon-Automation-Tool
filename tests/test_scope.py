@@ -145,6 +145,16 @@ def test_scope_files_written_by_windows_tools_load(tmp_path, label, data):
     assert sc.is_in_scope("example.com") and sc.is_in_scope("www.example.com"), label
 
 
+@pytest.mark.parametrize("target", [
+    "*.example.com",
+    "*.sub.example.com",
+    "  *.example.com  ",
+])
+def test_from_target_rejects_wildcard_targets(target):
+    with pytest.raises(ScopeError, match="wildcard target"):
+        Scope.from_target(target)
+
+
 def test_from_target_accepts_ip_targets_without_inventing_a_wildcard():
     for target in ("1.2.3.4", "::1"):
         sc = Scope.from_target(target)

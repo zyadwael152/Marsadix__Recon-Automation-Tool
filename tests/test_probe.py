@@ -2,6 +2,10 @@
 The command lines httpx / katana are started with. The rate limit is the only
 thing standing between `--rate 10` and the tools' own default of 150 req/s.
 (No real tools needed: the subprocess call is replaced by a recorder.)
+
+The fake process exposes the same stdin/stdout/stderr streams as
+asyncio.create_subprocess_exec(), because probe.py reads them concurrently so
+that partial output survives a timeout.
 """
 
 import asyncio
@@ -11,28 +15,68 @@ import pytest
 from marsadix.web import probe
 
 
-class _FakeProc:
-    def __init__(self, out: bytes):
-        self._out = out
+class _FakeReader:
+    def __init__(self, data: bytes = b"", block: bool = False):
+        self._data = data
+        self._block = block
+        self._unblocked = asyncio.Event()
 
-    async def communicate(self, input=None):
-        return self._out, b""
+    async def read(self, n: int = -1) -> bytes:
+        if self._data:
+            chunk, self._data = self._data[:n], self._data[n:]
+            return chunk
+        if self._block:
+            await self._unblocked.wait()
+        return b""
+
+    def unblock(self) -> None:
+        self._unblocked.set()
+
+
+class _FakeStdin:
+    def __init__(self, rec: dict):
+        self._rec = rec
+        self.closed = False
+
+    def write(self, data: bytes) -> None:
+        self._rec["stdin"] = data
+
+    async def drain(self) -> None:
+        pass
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _FakeProc:
+    def __init__(self, out: bytes = b"", err: bytes = b"", rec: dict | None = None,
+                 block: bool = False):
+        self.stdout = _FakeReader(out, block)
+        self.stderr = _FakeReader(err, block)
+        self.stdin = _FakeStdin(rec if rec is not None else {})
+        self._block = block
+        self.killed = False
+        self.waited = False
+
+    async def wait(self) -> int:
+        self.waited = True
+        if self._block and not self.killed:
+            await self.stdout._unblocked.wait()
+        return 0
+
+    def kill(self) -> None:
+        self.killed = True
+        self.stdout.unblock()
+        self.stderr.unblock()
 
 
 @pytest.fixture
 def spawned(monkeypatch):
-    rec = {"argv": None, "stdin": None, "out": b""}
+    rec = {"argv": None, "stdin": None, "out": b"", "err": b""}
 
     async def fake_exec(*argv, **kwargs):
         rec["argv"] = list(argv)
-        proc = _FakeProc(rec["out"])
-        orig = proc.communicate
-
-        async def communicate(input=None):
-            rec["stdin"] = input
-            return await orig(input)
-        proc.communicate = communicate
-        return proc
+        return _FakeProc(rec["out"], rec["err"], rec)
 
     monkeypatch.setattr(probe.asyncio, "create_subprocess_exec", fake_exec)
     return rec
@@ -94,22 +138,30 @@ def test_a_missing_tool_is_logged_not_raised(monkeypatch):
     assert asyncio.run(probe.run_katana(["https://a.example.com"])) == []
 
 
-class _HangingProc:
-    """Never finishes on its own; records whether it was killed and reaped."""
+@pytest.mark.parametrize("runner,args,payload,expected", [
+    (probe.run_httpx, ["a.example.com"],
+     b'{"url":"https://a.example.com","status_code":200}\n',
+     ["https://a.example.com"]),
+    (probe.run_katana, ["https://a.example.com"],
+     b"https://a.example.com/one\nhttps://a.example.com/two\n",
+     ["https://a.example.com/one", "https://a.example.com/two"]),
+])
+def test_partial_output_is_kept_when_the_tool_times_out(
+        monkeypatch, runner, args, payload, expected):
+    """A hung tool still leaves useful lines in stdout; do not throw them away."""
+    proc = _FakeProc(payload, b"still running", block=True)
 
-    def __init__(self):
-        self.killed = False
-        self.waited = False
+    async def fake_exec(*a, **k):
+        return proc
 
-    async def communicate(self, input=None):
-        await asyncio.sleep(3600)
+    monkeypatch.setattr(probe.asyncio, "create_subprocess_exec", fake_exec)
+    result = asyncio.run(runner(args, timeout=0.01))
 
-    def kill(self):
-        self.killed = True
-
-    async def wait(self):
-        self.waited = True
-        return -9
+    if runner is probe.run_httpx:
+        assert [r["url"] for r in result] == expected
+    else:
+        assert result == expected
+    assert proc.killed and proc.waited
 
 
 @pytest.mark.parametrize("runner,args", [
@@ -117,7 +169,7 @@ class _HangingProc:
     (probe.run_katana, ["https://a.example.com"]),
 ])
 def test_a_hung_tool_times_out_and_is_killed(monkeypatch, runner, args):
-    proc = _HangingProc()
+    proc = _FakeProc(block=True)
 
     async def fake_exec(*a, **k):
         return proc

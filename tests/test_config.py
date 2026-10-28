@@ -3,7 +3,7 @@ import os
 
 import pytest
 
-from marsadix.core.config import Config, ConfigError, load_config, load_dotenv
+from marsadix.core.config import ENV_MAP, Config, ConfigError, load_config, load_dotenv
 
 KNOWN = ["SHODAN_API_KEY", "VIRUSTOTAL_API_KEY", "MARSADIX_DNS_RATE_LIMIT", "MARSADIX_MAX_PERMUTATIONS",
          "MARSADIX_BRUTEFORCE_WORDLIST", "MARSADIX_RESOLVERS_FILE", "MARSADIX_DB"]
@@ -102,6 +102,18 @@ def test_config_toml_saved_as_utf16_by_powershell_is_readable():
     pytest.importorskip("tomllib")
     open("config.toml", "wb").write('rate_limit = 7\r\n'.encode("utf-16"))
     assert load_config(None).rate_limit == 7
+
+
+def test_securitytrails_was_fully_removed_from_the_config_surface(monkeypatch):
+    monkeypatch.setenv("SECURITYTRAILS_API_KEY", "st-should-be-ignored")
+    cfg = load_config(None)
+
+    assert "SECURITYTRAILS_API_KEY" not in ENV_MAP
+    assert not hasattr(cfg, "securitytrails_api_key")
+    # The active recon keys are still present and load normally.
+    assert ENV_MAP["SHODAN_API_KEY"] == "shodan_api_key"
+    assert ENV_MAP["CENSYS_API_KEY"] == "censys_api_key"
+    assert ENV_MAP["VIRUSTOTAL_API_KEY"] == "virustotal_api_key"
 
 
 def test_a_secret_in_config_toml_triggers_a_warning_that_never_shows_the_secret(caplog):

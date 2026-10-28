@@ -53,6 +53,16 @@ def test_filename_component_is_safe(target, expected):
     assert _safe_filename_component(target) == expected
 
 
+def test_previous_report_scan_is_strictly_earlier(conn):
+    """A newer scan must never be used as the report's "previous" baseline."""
+    old = _mk_scan(conn, "example.com", is_baseline=True)
+    current = _mk_scan(conn, "example.com")
+    _mk_scan(conn, "example.com")
+
+    from marsadix.reports.generate import _previous_completed_scan
+    assert _previous_completed_scan(conn, "example.com", current.id)["id"] == old.id
+
+
 def test_generate_report_writes_both_files(conn, tmp_path):
     scan = _mk_scan(conn, "example.com", is_baseline=True)
     db.save_many(conn, "assets", [Asset(scan_id=scan.id, host="api.example.com", in_scope=True)])

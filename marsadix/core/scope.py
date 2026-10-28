@@ -150,6 +150,15 @@ class Scope:
     @classmethod
     def from_target(cls, target: str) -> "Scope":
         """No scope file: the target itself + all its subdomains."""
+        raw = (target or "").strip()
+        if raw.startswith("*."):
+            # Accepting "*.example.com" here is ambiguous: is the apex in
+            # scope, or only subdomains? Require an explicit scope file so the
+            # operator's intent is recorded and cannot silently widen scope.
+            raise ScopeError(
+                f"wildcard target {target!r} is not allowed; pass the base "
+                f"domain (e.g. 'example.com') or list '*.example.com' in a "
+                f"scope file")
         t = normalize_host(target)
         if not t:
             raise ScopeError(f"invalid target: {target!r}")

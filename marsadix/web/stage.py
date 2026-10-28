@@ -118,7 +118,7 @@ def run(ctx, *args, **kwargs) -> dict:
     rate = ctx.scan.rate_limit or ctx.config.rate_limit
     logger.info("[+] Probing %d in-scope host(s) at <= %s req/s", len(hosts), rate)
 
-    probed = asyncio.run(run_httpx(hosts, rate))
+    probed = asyncio.run(run_httpx(hosts, rate, timeout=ctx.config.tool_timeout))
     live = [r for r in probed if ctx.in_scope(r["url"])]
     # The name may have resolved differently when httpx asked than when recon did.
     # The request has already gone out, but nothing more is done with such a host
@@ -147,7 +147,8 @@ def run(ctx, *args, **kwargs) -> dict:
     endpoints: List[str] = []
     if live_urls and ctx.allows("full"):
         seen = {_canonical(u) for u in live_urls}           # the roots are already stored as live URLs
-        endpoints = [u for u in _scoped(ctx, asyncio.run(run_katana(live_urls, rate)))
+        endpoints = [u for u in _scoped(ctx, asyncio.run(
+            run_katana(live_urls, rate, timeout=ctx.config.tool_timeout)))
                      if _canonical(u) not in seen]
     elif live_urls:
         logger.info("[*] Crawling skipped: katana only runs in --mode full")

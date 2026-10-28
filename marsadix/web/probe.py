@@ -17,6 +17,7 @@ roughly 2N", and pick a lower number for fragile targets.
 import asyncio
 import json
 import logging
+from contextlib import suppress
 from typing import List, Optional, Set
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,76 @@ logger = logging.getLogger(__name__)
 
 def _rate_args(rate_limit: Optional[int]) -> List[str]:
     return ["-rl", str(int(rate_limit))] if rate_limit else []
+
+
+async def _read_all(stream, sink: List[bytes]) -> None:
+    """Drain one pipe into `sink` until EOF (or until the task is cancelled)."""
+    if stream is None:
+        return
+    while True:
+        chunk = await stream.read(65536)
+        if not chunk:
+            return
+        sink.append(chunk)
+
+
+async def _feed_stdin(process, input_data: bytes) -> None:
+    """Write the tool's input and close stdin, tolerating an early exit."""
+    stdin = process.stdin
+    if stdin is None:
+        return
+    try:
+        if input_data:
+            stdin.write(input_data)
+            await stdin.drain()
+    except (BrokenPipeError, ConnectionResetError, OSError):
+        pass
+    finally:
+        with suppress(Exception):
+            stdin.close()
+
+
+async def _communicate_with_partial(process, input_data: bytes, timeout: int):
+    """
+    Like process.communicate(), but keep whatever was streamed before a timeout.
+
+    communicate() buffers internally, so cancelling it on TimeoutError throws
+    away every line the tool had already printed -- exactly the preliminary
+    discovery data a recon pipeline wants to keep. Here stdout/stderr are read
+    concurrently, so after kill() we can still parse the partial output.
+
+    Returns (stdout, stderr, timed_out).
+    """
+    stdout_parts: List[bytes] = []
+    stderr_parts: List[bytes] = []
+    readers = [
+        asyncio.create_task(_read_all(process.stdout, stdout_parts)),
+        asyncio.create_task(_read_all(process.stderr, stderr_parts)),
+    ]
+    writer = asyncio.create_task(_feed_stdin(process, input_data))
+    timed_out = False
+    try:
+        await asyncio.wait_for(process.wait(), timeout=timeout)
+    except asyncio.TimeoutError:
+        timed_out = True
+        with suppress(ProcessLookupError):
+            process.kill()
+        await process.wait()
+    finally:
+        if not writer.done():
+            writer.cancel()
+        with suppress(asyncio.CancelledError):
+            await writer
+        # A killed child normally closes its pipes immediately. Bound the wait
+        # anyway: a grandchild can inherit the pipe and keep it open forever.
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*readers, return_exceptions=True), timeout=5)
+        except asyncio.TimeoutError:
+            for task in readers:
+                task.cancel()
+            await asyncio.gather(*readers, return_exceptions=True)
+    return b"".join(stdout_parts), b"".join(stderr_parts), timed_out
 
 
 async def run_httpx(domains: List[str], rate_limit: Optional[int] = None,
@@ -53,17 +124,14 @@ async def run_httpx(domains: List[str], rate_limit: Optional[int] = None,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        try:
-            stdout, _ = await asyncio.wait_for(
-                process.communicate(input=input_data), timeout=timeout)
-        except asyncio.TimeoutError:
-            # Cancelling communicate() does not stop the child: without kill()
-            # a hung httpx keeps running (and holding the pipe) after the
-            # stage has moved on.
-            process.kill()
-            await process.wait()
-            logger.warning("[-] httpx timed out after %ss - using partial results.", timeout)
-            return live
+        stdout, stderr, timed_out = await _communicate_with_partial(
+            process, input_data, timeout)
+        if timed_out:
+            logger.warning("[-] httpx timed out after %ss - parsing %d partial output byte(s).",
+                           timeout, len(stdout))
+            if stderr:
+                logger.debug("[-] httpx stderr before timeout: %s",
+                             stderr.decode(errors="replace").strip()[:500])
 
         for line in stdout.decode(errors="replace").splitlines():
             try:
@@ -110,14 +178,14 @@ async def run_katana(urls: List[str], rate_limit: Optional[int] = None,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        try:
-            stdout, _ = await asyncio.wait_for(
-                process.communicate(input=input_data), timeout=timeout)
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
-            logger.warning("[-] katana timed out after %ss - using partial results.", timeout)
-            return sorted(endpoints)
+        stdout, stderr, timed_out = await _communicate_with_partial(
+            process, input_data, timeout)
+        if timed_out:
+            logger.warning("[-] katana timed out after %ss - parsing %d partial output byte(s).",
+                           timeout, len(stdout))
+            if stderr:
+                logger.debug("[-] katana stderr before timeout: %s",
+                             stderr.decode(errors="replace").strip()[:500])
 
         for line in stdout.decode(errors="replace").splitlines():
             url = line.strip()

@@ -69,7 +69,9 @@ _STATUS_LABEL = {
 
 def _previous_completed_scan(conn, target: str, exclude_scan_id: int) -> Optional[dict]:
     row = conn.execute(
-        "SELECT * FROM scans WHERE target=? AND id<>? AND status='completed' "
+        # Strictly older than the report's scan. `id <> ?` allowed a newer
+        # scan to be selected, so "previous" trend data could run backwards.
+        "SELECT * FROM scans WHERE target=? AND id<? AND status='completed' "
         "ORDER BY started_at DESC, id DESC LIMIT 1",
         (target, exclude_scan_id)).fetchone()
     return dict(row) if row else None

@@ -43,23 +43,27 @@ export PATH="$PATH:$INSTALL_DIR"
 if command -v apt &>/dev/null; then
     PKG_INSTALL="apt install -y"
     PKG_UPDATE="apt update -y"
+    BUILD_PKGS="make libpcap-dev"
 elif command -v dnf &>/dev/null; then
     PKG_INSTALL="dnf install -y"
     PKG_UPDATE="dnf check-update || true"
+    BUILD_PKGS="make libpcap-devel"
 elif command -v pacman &>/dev/null; then
     PKG_INSTALL="pacman -S --noconfirm"
     PKG_UPDATE="pacman -Sy"
+    BUILD_PKGS="make libpcap"
 elif command -v brew &>/dev/null; then
     PKG_INSTALL="brew install"
     PKG_UPDATE="brew update"
+    BUILD_PKGS="make libpcap"
 else
-    log_err "No supported package manager found (apt/dnf/pacman/brew). Install base packages manually: curl wget git unzip python3 golang"
+    log_err "No supported package manager found (apt/dnf/pacman/brew). Install base packages manually: curl wget git unzip make python3 golang libpcap"
     exit 1
 fi
 
 log_info "Updating system and installing base prerequisites..."
 $PKG_UPDATE
-$PKG_INSTALL curl wget git unzip file python3 python3-venv python3-pip nmap || log_warn "Some base packages may have failed to install"
+$PKG_INSTALL curl wget git unzip file python3 python3-venv python3-pip nmap $BUILD_PKGS || log_warn "Some base packages may have failed to install"
 
 # 3. Go: make sure a recent-enough version is present.
 MIN_GO_MINOR=21
@@ -137,6 +141,32 @@ install_go_tool() {
     log_err "$name failed to install (see $logfile)."
 }
 
+# massdns is a C resolver, not a Go module. `go install
+# github.com/blechschmidt/massdns/bin/massdns` never worked (the repo has no
+# Go module); build it with make and copy the resulting binary.
+install_massdns() {
+    local src="$INSTALL_TMP_DIR/massdns"
+    local logfile="/tmp/marsadix_massdns.log"
+    log_info "Building massdns from source (C)..."
+    rm -rf "$src"
+    if ! git clone --depth 1 https://github.com/blechschmidt/massdns.git "$src" &>"$logfile"; then
+        FAILED+=("massdns")
+        log_err "massdns failed: could not clone the repository (see $logfile)."
+        return
+    fi
+    if ! make -C "$src" &>>"$logfile"; then
+        FAILED+=("massdns")
+        log_err "massdns failed to build; install make and libpcap headers (see $logfile)."
+        return
+    fi
+    if [ -f "$src/bin/massdns" ]; then
+        chmod +x "$src/bin/massdns"
+        cp -f "$src/bin/massdns" "$INSTALL_DIR/" && { log_ok "massdns installed."; return; }
+    fi
+    FAILED+=("massdns")
+    log_err "massdns build finished but bin/massdns was not produced (see $logfile)."
+}
+
 install_go_tool subfinder   github.com/projectdiscovery/subfinder/v2/cmd/subfinder
 install_go_tool assetfinder github.com/tomnomnom/assetfinder
 install_go_tool chaos       github.com/projectdiscovery/chaos-client/cmd/chaos
@@ -148,8 +178,8 @@ install_go_tool nuclei      github.com/projectdiscovery/nuclei/v3/cmd/nuclei
 install_go_tool gau         github.com/lc/gau/v2/cmd/gau
 install_go_tool ffuf        github.com/ffuf/ffuf/v2
 install_go_tool alterx      github.com/projectdiscovery/alterx/cmd/alterx
-install_go_tool massdns     github.com/blechschmidt/massdns/bin/massdns
 install_go_tool puredns     github.com/d3mondev/puredns/v2/cmd/puredns
+install_massdns
 # `apt install amass` does not exist on Debian/Ubuntu (it is a Kali package),
 # which made the Docker build fail its tool check. Install it like the other
 # Go tools instead of relying on the distro package manager.
