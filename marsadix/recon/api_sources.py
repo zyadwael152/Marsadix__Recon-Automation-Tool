@@ -115,7 +115,7 @@ async def fetch_alienvault(domain: str, api_key: str = None) -> Tuple[str, Set[s
     url = f"https://otx.alienvault.com/api/v1/indicators/domain/{urllib.parse.quote(domain, safe='.-')}/passive_dns"
     logger.info("[*] Querying AlienVault...")
     try:
-        headers = {"X-OTX-API-KEY": api_key} if api_key else {}
+        headers = {"OTX-API-KEY": api_key} if api_key else {}
         await asyncio.sleep(1)  # reduce anonymous-tier rate-limit pressure
         data = await _request_json_async(url, headers)
         subdomains.update(_extract_names(data.get("passive_dns", []), domain, key="hostname"))
@@ -147,7 +147,7 @@ async def fetch_shodan(domain: str, api_key: str = None) -> Tuple[str, Set[str]]
     logger.info("[*] Querying Shodan...")
     try:
         for page in range(1, MAX_API_PAGES + 1):
-            query = urllib.parse.urlencode({"key": api_key, "query": f"hostname:{domain}", "page": page})
+            query = urllib.parse.urlencode({"SHODAN-API-KEY": api_key, "query": f"hostname:{domain}", "page": page})
             url = f"https://api.shodan.io/shodan/host/search?{query}"
             data = await _request_json_async(url)
             for match in data.get("matches", []):
