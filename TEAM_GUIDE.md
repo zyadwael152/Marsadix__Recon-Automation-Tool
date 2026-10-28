@@ -103,7 +103,7 @@ marsadix doctor
 **Windows (PowerShell):**
 
 ```
-powershell -ExecutionPolicy Bypass -File scripts\install-tools.ps1 -AddToPath
+powershell -ExecutionPolicy Bypass -File scripts\install-tools.ps1
 winget install Insecure.Nmap
 ```
 
@@ -112,11 +112,10 @@ winget install Insecure.Nmap
 **Linux:**
 
 ```
-bash scripts/install-tools.sh
-sudo apt install -y nmap libpcap-dev
+sudo bash scripts/install-tools.sh
 ```
 
-السكريبت بينزّل الأدوات في `~/.local/bin`. لو الفولدر ده مش في الـ PATH، السكريبت هيطبعلك السطر اللي تنسخه في `~/.bashrc`، وبعدين:
+السكريبت بيحتاج `sudo`، وبينزّل الأدوات (ومعاها nmap وlibpcap) في `/usr/local/bin`. لو الفولدر ده مش في الـ PATH، ضيفه لـ `~/.bashrc`، وبعدين:
 
 ```
 source ~/.bashrc
@@ -130,7 +129,7 @@ source ~/.bashrc
 marsadix doctor
 ```
 
-المفروض يظهر في آخره `9/9 tools found`.
+المفروض يظهر في آخره `13/13 tools found`.
 
 **لو فشلت:**
 
@@ -267,8 +266,10 @@ marsadix scope scope.txt www.vulnweb.com rest.vulnweb.com google.com vulnweb.com
 | --- | --- | --- |
 | recon | `marsadix/recon/stage.py` | `run(ctx)` |
 | web | `marsadix/web/stage.py` | `run(ctx)` |
+| ports | `marsadix/ports/stage.py` | `run(ctx)` |
 | asm | `marsadix/asm/stage.py` | `run(ctx)` |
 | track | `marsadix/core/diff.py` | `run_stage(ctx)` |
+| graph | `marsadix/core/graph.py` | `run_stage(ctx)` |
 
 **الأوامر التانية:**
 
@@ -276,7 +277,10 @@ marsadix scope scope.txt www.vulnweb.com rest.vulnweb.com google.com vulnweb.com
 | --- | --- | --- |
 | `marsadix monitor` | `marsadix/monitor/runner.py` | `run(conn, config, dry_run=False, since=None)` |
 | `marsadix diff` | `marsadix/core/diff.py` | `run_diff(conn, target, old_id=None, new_id=None)` |
+| `marsadix snapshots` | `marsadix/core/diff.py` | `run_snapshots(conn, target)` |
 | `marsadix report` | `marsadix/reports/generate.py` | `generate_report(conn, target, fmt, out_dir, scan_id=None)` |
+| `marsadix graph` | `marsadix/core/graph.py` | `run_graph(conn, target, scan_id=None)` |
+| `marsadix ct-monitor` | `marsadix/recon/ct_monitor.py` | `monitor_ct_logs(target, output_file=...)` |
 
 **حالة الملفات دلوقتي:**
 
@@ -284,10 +288,12 @@ marsadix scope scope.txt www.vulnweb.com rest.vulnweb.com google.com vulnweb.com
 | --- | --- |
 | `marsadix/core/diff.py` | ✅ متنفذ (track stage + diff engine + CLI) |
 | `marsadix/reports/generate.py` | ✅ متنفذ (HTML + JSON) |
-| `marsadix/recon/stage.py` | ⬜ لسه فاضي — الشخص 1 |
-| `marsadix/web/stage.py` و `marsadix/asm/stage.py` | ⬜ لسه فاضي — الشخص 2 |
+| `marsadix/recon/stage.py` | ✅ متنفذ (اكتشاف + DNS + CDN/ASN + VHost) |
+| `marsadix/web/stage.py` | ✅ متنفذ (httpx + katana) |
+| `marsadix/ports/stage.py` | ✅ متنفذ (naabu + nmap) |
+| `marsadix/core/graph.py` | ✅ متنفذ (storage + builder + queries + CLI) |
+| `marsadix/asm/stage.py` | ⬜ لسه فاضي — الشخص 2 |
 | `marsadix/monitor/runner.py` | ⬜ لسه فاضي — الشخص 3 و4 |
-| `marsadix/core/graph.py` | ⬜ لسه فاضي بالكامل (الـ storage جاهز في `db.py`: `upsert_graph_node`, `add_graph_edge`, `get_graph`, `get_neighbors`) |
 
 **الـ `ctx` اللي بتستقبله المرحلة:**
 
@@ -305,10 +311,10 @@ marsadix scope scope.txt www.vulnweb.com rest.vulnweb.com google.com vulnweb.com
 
 | الشخص | الدور | ملفك |
 | --- | --- | --- |
-| 1 | Recon | `marsadix/recon/stage.py` |
-| 2 | Web Surface + ASM | `marsadix/web/stage.py` و`marsadix/asm/stage.py` |
-| 3 و4 | CVE Monitor | `marsadix/monitor/runner.py` |
-| 5 | Core + Reports | `marsadix/core/diff.py` و`marsadix/reports/generate.py` |
+| 1 | Recon | `marsadix/recon/stage.py` (متنفذ — راجع/وسّع) |
+| 2 | Web Surface + ASM | `marsadix/web/stage.py` (متنفذ) و`marsadix/asm/stage.py` (لسه فاضي) |
+| 3 و4 | CVE Monitor | `marsadix/monitor/runner.py` (لسه فاضي) |
+| 5 | Core + Reports | `marsadix/core/diff.py` و`marsadix/reports/generate.py` (متنفذين) |
 
 ## خطوة 12 — اعمل Branch خاص بيك
 
@@ -375,19 +381,21 @@ INFO marsadix.core.pipeline: scan #1 started: vulnweb.com (baseline=True)
 INFO marsadix.core.pipeline: stage 'recon' started
 INFO marsadix.recon.stage: hello from the recon stage, target=vulnweb.com
 INFO marsadix.recon.stage: is the target in scope? True
-INFO marsadix.core.pipeline: stage 'web' not implemented yet, skipping
+INFO marsadix.core.pipeline: stage 'asm' not implemented yet, skipping
 ...
 Scan #1 of vulnweb.com: completed (baseline)
   recon    ok
-  web      skipped  marsadix.web.stage:run not found
+  web      ok
+  ports    ok
   asm      skipped  marsadix.asm.stage:run not found
-  track    skipped  marsadix.core.diff:run_stage not found
+  track    ok
+  graph    ok
 ```
 
 **معنى النتيجة:**
 
 - `recon ok` معناها التول لقت ملفك وشغّلته.
-- `skipped ... not found` للمراحل اللي لسه محدش كتبها، وده طبيعي.
+- `skipped ... not found` للمراحل اللي لسه محدش كتبها (`asm` و`monitor` فقط حالياً)، وده طبيعي.
 
 **لو ظهر `recon skipped`:** اسم الملف أو الدالة أو الفولدر غلط (حتى حرف واحد)، أو ناقص `__init__.py`. قارن بجدول خطوة 10.
 **لو ظهر `recon failed`:** الكود اتكسر. الخطأ الكامل بيظهر في اللوج فوق.
@@ -559,7 +567,7 @@ git push -u origin feature/اسم-شغلك
 | `ModuleNotFoundError: marsadix` | نفس السبب: الـ venv غلط أو التثبيت ناقص |
 | مرحلتك `skipped ... not found` | اسم الملف أو الدالة أو الفولدر غلط، أو ناقص `__init__.py` (جدول خطوة 10) |
 | مرحلتك `failed` | الكود اتكسر. اقرا الخطأ الكامل في اللوج (شغّل بـ `-v`) |
-| `not implemented yet` (exit 3) في `monitor` أو `diff` أو `report` | نفس سبب `skipped`: اسم الملف أو الدالة |
+| `not implemented yet` (exit 3) في `monitor` | نفس سبب `skipped`: اسم الملف أو الدالة (`marsadix/monitor/runner.py` لسه مش موجود) |
 | `MISSING` في `doctor` | الأداة مش متثبتة أو مش في الـ PATH (خطوة 5) |
 | `Database schema is vX ...` | ملف `marsadix.db` المحلي قديم. امسحه وشغّل تاني |
 | `Activate.ps1` ممنوع (Windows) | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |

@@ -16,7 +16,7 @@ allow_injection = false  # true only when injection detection (A5) is wanted
 # Word list for DNS bruteforce and virtual-host discovery. Empty = built-in small list;
 # VHost discovery only runs when a word list is configured.
 # bruteforce_wordlist = "wordlists/subdomains.txt"
-# A resolver list you trust (one IP per line). Empty = a `resolvers.txt` found in the folder you run
-# Marsadix from, otherwise a few built-in public resolvers. Set it explicitly: a resolvers.txt
-# you did not write would decide which DNS answers the whole scan believes.
+# A resolver list you trust (one IP per line). Empty = a few built-in public resolvers.
+# Set it explicitly for large bruteforce runs: public resolvers rate-limit aggressively,
+# and whoever controls the resolver decides which DNS answers the scan believes.
 # resolvers_file = "resolvers.txt"

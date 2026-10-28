@@ -15,7 +15,7 @@
 
 ## 📍 Current status
 
-This is an active student project. The **core engine** (scope enforcement, scan pipeline, scan-to-scan diffing, asset-change alerts, HTML/JSON reporting, OWASP Top 10 coverage mapping) is implemented and tested. The **discovery and detection modules** (recon, web surface collection, ASM/Nuclei, CVE monitor) are being built stage by stage on top of that engine — see the [Roadmap](#️-roadmap) for exactly what's done.
+This is an active student project. The **core engine** (scope enforcement, scan pipeline, scan-to-scan diffing, asset-change alerts, HTML/JSON reporting, OWASP Top 10 coverage mapping, knowledge graph) is implemented and tested, as are the **recon, web-surface and port/service stages**. The **ASM/Nuclei detection stage and the CVE monitor** are still being built — see the [Roadmap](#️-roadmap) for exactly what's done.
 
 ## ⚡ Overview
 
@@ -47,7 +47,7 @@ Security assessments usually mean running several tools and manually stitching t
 | 🧠 **CVE correlation** Connect detected service and technology evidence with known vulnerabilities, prioritized with **EPSS** exploitation-probability scores. | 📊 **Confidence scoring** Separate possible, likely and confirmed findings based on evidence, plus a **source-confidence score** per asset from how many independent tools found it. |
 | 🛡️ **Safe verification** Validate findings with non-destructive checks, without exploitation — every finding carries `exploited: false`. | 🔁 **Scan diffing** Compare scan history to identify new assets, ports, technologies and findings. |
 | 🔔 **CVE monitor** Match newly published CVEs against stored technologies and send alerts. | 📄 **Unified reports** Prioritized, filterable HTML report (Triage and Engagement views) plus machine-readable JSON. |
-| 🧭 **OWASP Top 10 mapping** Every finding is tagged with its OWASP Top 10 (2021) category; the report shows how much of the Top 10 was actually tested. | 🕸️ **Knowledge Graph** *(planned)* — link assets, services, technologies and CVEs together so questions like "what else shares this certificate?" have an answer, not just a list. |
+| 🧭 **OWASP Top 10 mapping** Every finding is tagged with its OWASP Top 10 (2021) category; the report shows how much of the Top 10 was actually tested. | 🕸️ **Knowledge Graph** Link assets, services, technologies and CVEs together so questions like "what else shares this IP?" have an answer, not just a list. |
 
 ## 🔬 How it works
 
@@ -139,7 +139,7 @@ Each scan is stored, and Marsadix compares it with previous ones to answer: *wha
 - **Scope filtering:** targets and every newly discovered asset are validated against the authorized scope before active scanning.
 - **CDN and shared-hosting awareness:** a CDN or hosting provider's IP is never treated as permission to scan unrelated assets, and ASN ownership is checked rather than assumed.
 - **Verify-only approach:** no exploitation is performed by the tool.
-- **Safe mode:** a planned `--safe-mode` option prevents any check that could affect the target.
+- **Passive by default:** `--mode passive` (the default) sends no traffic to the target; `standard` and `full` require an explicit `--scope`, and injection-style checks additionally require `--allow-injection`.
 - **Configurable rates:** request rates are adjustable to reduce load on target systems.
 - **Evidence-driven output:** uncertainty is communicated instead of treating every match as confirmed.
 - **Privacy:** email addresses are personal data. Collect them from public sources only, store the minimum needed, and do not publish them in reports or repositories.
@@ -161,7 +161,15 @@ marsadix diff example.com --old 3 --new 7
 # Generate the HTML + JSON report for the latest scan
 marsadix report example.com --out output
 
+# Show the stored knowledge graph / list every scan of a target
+marsadix graph example.com
+marsadix snapshots example.com
+
+# Stream Certificate Transparency logs for new subdomains
+marsadix ct-monitor example.com
+
 # Check new CVEs against stored technologies and send alerts
+# (the monitor module is not implemented yet; exits 3 with a clear message)
 marsadix monitor --dry-run
 
 # Check whether hosts fall inside an authorized scope file
@@ -201,7 +209,7 @@ The intended output helps answer:
 - Which results are possible matches versus safely confirmed issues?
 - What changed since the previous scan?
 
-**Planned outputs:** a readable, filterable HTML report, structured JSON results, scan-to-scan differences and CVE alerts.
+**Outputs:** a readable, filterable HTML report, structured JSON results and scan-to-scan differences. CVE alerts are planned with the monitor module.
 
 ## 🔎 Related projects
 
@@ -226,17 +234,18 @@ The differences this project aims for are the combination of recursive recon wit
 - [x] Source-confidence scoring per discovered asset
 - [x] Docker packaging
 - [x] Schema-version check with an actionable error message instead of a raw SQL error
-- [ ] Knowledge Graph (link assets/services/technologies/CVEs; "what else shares this?" queries)
-- [ ] `--mode passive/standard/full` enforcement and an explicit opt-in flag for injection checks
+- [x] Knowledge Graph (link assets/services/technologies/CVEs; "what else shares this?" queries)
+- [x] `--mode passive/standard/full` enforcement and an explicit opt-in flag for injection checks
 - [ ] SARIF and PDF report export (CSV export is done)
 - [ ] Reproducible benchmarks against existing tools
 
 ### Discovery and detection modules (built on the engine above)
 
-- [ ] Passive and active reconnaissance (subfinder, amass, crt.sh, dnsx, httpx, naabu, nmap, CDN/ASN detection)
-- [ ] Recursive recon with scope enforcement and depth limit
-- [ ] Permutation (alterx/dnsgen) and DNS bruteforcing with wildcard filtering
-- [ ] Collection of URLs, JavaScript files, endpoints, technologies and public emails
+- [x] Passive and active reconnaissance (subfinder, amass, crt.sh, dnsx, httpx, naabu, nmap, CDN/ASN detection)
+- [x] Recursive recon with scope enforcement and depth limit
+- [x] Permutation (alterx/dnsgen) and DNS bruteforcing with wildcard filtering
+- [x] Collection of URLs, JavaScript files, endpoints and technologies
+- [ ] Public email collection
 - [ ] Web checks using Nuclei (takeover, exposures, CVE templates) plus custom detection skills (XSS, SQLi, SSTI...) sourced from documented methodologies (PortSwigger, PayloadsAllTheThings, OWASP Testing Guide)
 - [ ] CVE monitor: NVD + CISA KEV sync, EPSS scoring, CPE matching
 - [ ] Alert delivery: Discord, Telegram, email, generic webhook
