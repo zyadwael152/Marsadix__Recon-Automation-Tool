@@ -7,3 +7,6 @@ output/
 *.egg-info/
 .pytest_cache/
 scope.txt
+*.db-wal
+*.db-shm
+*.db-journal

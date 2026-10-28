@@ -62,9 +62,24 @@ async def resolve_domain(domain: str) -> Optional[str]:
     return ips[0] if ips else None
 
 
+def _str_list(value) -> List[str]:
+    """dnsx fields are lists of strings; tolerate a bare string, null, or junk entries."""
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    return [v.strip() for v in value if isinstance(v, str) and v.strip()]
+
+
 def parse_dnsx_json(text: str) -> Dict[str, dict]:
-    """Parse `dnsx -json` lines into {host: {"ips": [...], "cname": [...]}}."""
+    """
+    Parse `dnsx -json` lines into {host: {"ips": [...], "cname": [...]}}.
+
+    One malformed record (wrong type, missing field, a new dnsx version changing
+    a field) is logged and skipped; it never aborts the whole resolution stage.
+    """
     out: Dict[str, dict] = {}
+    bad = 0
     for line in text.splitlines():
         line = line.strip()
         if not line:
@@ -72,22 +87,29 @@ def parse_dnsx_json(text: str) -> Dict[str, dict]:
         try:
             data = json.loads(line)
         except ValueError:
-            continue
+            continue                      # a log line, not a record
         if not isinstance(data, dict):
+            bad += 1
             continue
-        host = (data.get("host") or "").strip().lower().rstrip(".")
+        host = data.get("host")
+        if not isinstance(host, str):
+            bad += 1
+            continue
+        host = host.strip().lower().rstrip(".")
         # dnsx can return A and AAAA in separate arrays; keep both address families.
-        ips = [ip for ip in (data.get("a") or []) + (data.get("aaaa") or []) if ip]
+        ips = _str_list(data.get("a")) + _str_list(data.get("aaaa"))
         if not host or not ips:
             continue
         entry = out.setdefault(host, {"ips": [], "cname": []})
         for ip in ips:
             if ip not in entry["ips"]:
                 entry["ips"].append(ip)
-        for cname in data.get("cname") or []:
-            cname = cname.strip().lower().rstrip(".")
+        for cname in _str_list(data.get("cname")):
+            cname = cname.lower().rstrip(".")
             if cname and cname not in entry["cname"]:
                 entry["cname"].append(cname)
+    if bad:
+        logger.warning("[-] dnsx: skipped %d record(s) with an unexpected structure.", bad)
     return out
 
 

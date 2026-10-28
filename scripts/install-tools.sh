@@ -106,6 +106,11 @@ REAL_USER="${SUDO_USER:-$USER}"
 # No `eval echo "~$REAL_USER"`: SUDO_USER is environment-controlled, and eval
 # would execute shell metacharacters in it. Read the passwd entry instead.
 REAL_HOME=$(getent passwd "$REAL_USER" 2>/dev/null | cut -d: -f6)
+# getent does not exist on macOS (and some minimal images): fall back, never leave it empty.
+if [ -z "$REAL_HOME" ] && [ "$(uname -s)" = "Darwin" ]; then
+    REAL_HOME=$(dscl . -read "/Users/$REAL_USER" NFSHomeDirectory 2>/dev/null | awk '{print $2}')
+fi
+[ -z "$REAL_HOME" ] && REAL_HOME="$HOME"
 [ -n "$REAL_HOME" ] || REAL_HOME="$HOME"
 export GOPATH="$REAL_HOME/go"
 export PATH=$PATH:$GOPATH/bin
@@ -123,18 +128,34 @@ for RC in "$REAL_HOME/.bashrc" "$REAL_HOME/.zshrc"; do
 done
 
 # 5. Install each Go-based tool
+# Versions: "latest" by default, but reproducible when you want it -- pin one tool
+# with an environment variable, e.g.  MARSADIX_NUCLEI_VERSION=v3.3.5 bash install-tools.sh
+# Whatever actually got installed is written to $INSTALL_DIR/marsadix-tool-versions.txt.
+record_version() {
+    local name="$1" what="$2"
+    echo "$name $what" >> "$INSTALL_DIR/marsadix-tool-versions.txt" 2>/dev/null || true
+}
+
 install_go_tool() {
     local name="$1" pkg="$2" logfile="/tmp/marsadix_${1}.log"
-    log_info "Installing $name..."
+    local ver_var ver rc
+    ver_var="MARSADIX_$(echo "$name" | tr '[:lower:]' '[:upper:]')_VERSION"
+    ver="${!ver_var:-latest}"
+    log_info "Installing $name ($ver)..."
     if [ -n "${SUDO_USER:-}" ] && command -v sudo >/dev/null 2>&1; then
-        sudo -u "$REAL_USER" env PATH="$PATH" GOPATH="$GOPATH" go install -v "$pkg@latest" &>"$logfile"
+        sudo -u "$REAL_USER" env PATH="$PATH" GOPATH="$GOPATH" go install -v "$pkg@$ver" &>"$logfile"
     else
-        env PATH="$PATH" GOPATH="$GOPATH" go install -v "$pkg@latest" &>"$logfile"
+        env PATH="$PATH" GOPATH="$GOPATH" go install -v "$pkg@$ver" &>"$logfile"
     fi
-    if [ "$?" -eq 0 ]; then
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
         local bin="$GOPATH/bin/$name"
         if [ -x "$bin" ]; then
-            cp -f "$bin" "$INSTALL_DIR/" && { log_ok "$name installed."; return; }
+            if cp -f "$bin" "$INSTALL_DIR/"; then
+                record_version "$name" "$(go version -m "$bin" 2>/dev/null | awk '$1=="mod"{print $3; exit}')"
+                log_ok "$name installed."
+                return
+            fi
         fi
     fi
     FAILED+=("$name")
@@ -149,7 +170,15 @@ install_massdns() {
     local logfile="/tmp/marsadix_massdns.log"
     log_info "Building massdns from source (C)..."
     rm -rf "$src"
-    if ! git clone --depth 1 https://github.com/blechschmidt/massdns.git "$src" &>"$logfile"; then
+    # MASSDNS_REF pins a tag or branch (default: the repository's default branch).
+    local ref_args=()
+    [ -n "${MASSDNS_REF:-}" ] && ref_args=(--branch "$MASSDNS_REF")
+    if ! command -v make &>/dev/null || ! command -v gcc &>/dev/null; then
+        FAILED+=("massdns")
+        log_err "massdns needs a C toolchain: sudo apt install -y build-essential (macOS: xcode-select --install)."
+        return
+    fi
+    if ! git clone --depth 1 "${ref_args[@]}" https://github.com/blechschmidt/massdns.git "$src" &>"$logfile"; then
         FAILED+=("massdns")
         log_err "massdns failed: could not clone the repository (see $logfile)."
         return
@@ -161,7 +190,11 @@ install_massdns() {
     fi
     if [ -f "$src/bin/massdns" ]; then
         chmod +x "$src/bin/massdns"
-        cp -f "$src/bin/massdns" "$INSTALL_DIR/" && { log_ok "massdns installed."; return; }
+        if cp -f "$src/bin/massdns" "$INSTALL_DIR/"; then
+            record_version "massdns" "git $(git -C "$src" rev-parse --short HEAD 2>/dev/null)"
+            log_ok "massdns installed."
+            return
+        fi
     fi
     FAILED+=("massdns")
     log_err "massdns build finished but bin/massdns was not produced (see $logfile)."

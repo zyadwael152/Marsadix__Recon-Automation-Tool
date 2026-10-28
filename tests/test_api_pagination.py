@@ -79,18 +79,33 @@ def test_censys_follows_cursor_and_filters_out_of_domain_names(monkeypatch):
 def test_cli_tool_preserves_partial_stdout_on_timeout(monkeypatch):
     from marsadix.recon import discovery
 
+    class FakeStream:
+        def __init__(self, data: bytes, delay: float = 0.0):
+            self.data, self.delay = data, delay
+
+        async def read(self, n=-1):
+            if self.data:
+                await asyncio.sleep(self.delay)
+                chunk, self.data = self.data, b""
+                return chunk
+            await asyncio.sleep(0.2)              # a tool that is still running: no EOF yet
+            return b""
+
     class FakeProcess:
         def __init__(self):
             self.killed = False
-
-        async def communicate(self):
-            await asyncio.sleep(0.03)
-            return b"partial.example.com\n", b"timeout after partial result"
+            self.returncode = None
+            self.stdout = FakeStream(b"partial.example.com\n")
+            self.stderr = FakeStream(b"timeout after partial result")
+            self.stdin = None
 
         def kill(self):
             self.killed = True
+            self.returncode = -9
 
         async def wait(self):
+            while not self.killed:
+                await asyncio.sleep(0.01)
             return -9
 
     fake = FakeProcess()

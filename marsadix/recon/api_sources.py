@@ -15,6 +15,8 @@ import urllib.request
 from functools import partial
 from typing import Any, Dict, Set, Tuple
 
+from ..core import toolstatus
+
 logger = logging.getLogger(__name__)
 
 HTTP_TIMEOUT = 15  # seconds
@@ -108,6 +110,7 @@ async def fetch_virustotal(domain: str, api_key: str = None) -> Tuple[str, Set[s
         logger.info("[+] VirusTotal discovered %d subdomains (up to %d pages).", len(subdomains), MAX_API_PAGES)
     except Exception as e:
         logger.warning("[-] VirusTotal request failed (%s).", type(e).__name__)
+        toolstatus.record("virustotal", "failed", type(e).__name__)
     return "virustotal", subdomains
 
 
@@ -128,8 +131,10 @@ async def fetch_alienvault(domain: str, api_key: str = None) -> Tuple[str, Set[s
             logger.warning("[-] AlienVault rate-limited (HTTP 429); skipped gracefully.")
         else:
             logger.warning("[-] AlienVault request failed with HTTP %s.", e.code)
+        toolstatus.record("alienvault", "failed", f"HTTP {e.code}")
     except Exception as e:
         logger.warning("[-] AlienVault request failed (%s).", type(e).__name__)
+        toolstatus.record("alienvault", "failed", type(e).__name__)
     return "alienvault", subdomains
 
 
@@ -171,6 +176,7 @@ async def fetch_shodan(domain: str, api_key: str = None) -> Tuple[str, Set[str]]
         logger.info("[+] Shodan discovered %d subdomains (up to %d pages).", len(subdomains), MAX_API_PAGES)
     except Exception as e:
         logger.warning("[-] Shodan request failed (%s); API key redacted.", type(e).__name__)
+        toolstatus.record("shodan", "failed", type(e).__name__)
     return "shodan", subdomains
 
 
@@ -219,4 +225,5 @@ async def fetch_censys(domain: str, api_key: str = None) -> Tuple[str, Set[str]]
         logger.info("[+] Censys discovered %d subdomains (up to %d pages).", len(subdomains), MAX_API_PAGES)
     except Exception as e:
         logger.warning("[-] Censys request failed (%s).", type(e).__name__)
+        toolstatus.record("censys", "failed", type(e).__name__)
     return "censys", subdomains

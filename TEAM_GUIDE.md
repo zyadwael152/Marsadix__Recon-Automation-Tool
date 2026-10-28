@@ -375,7 +375,7 @@ marsadix -v scan vulnweb.com
 **المفروض يطلع (مع بعض التفاصيل الزيادة):**
 
 ```
-WARNING marsadix.cli: no --scope given: using vulnweb.com and *.vulnweb.com
+WARNING marsadix.cli: no --scope given: using vulnweb.com and *.vulnweb.com   (passive mode only: --mode standard/full REFUSE to run without --scope)
 INFO marsadix.core.pipeline: scan #1 started: vulnweb.com (baseline=True)
 INFO marsadix.core.pipeline: stage 'recon' started
 INFO marsadix.recon.stage: hello from the recon stage, target=vulnweb.com

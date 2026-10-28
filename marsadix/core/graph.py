@@ -392,7 +392,8 @@ def run_graph(conn, target: str, scan_id: Optional[int] = None, ascii_tree: bool
     an exit code.
     """
     if scan_id is None:
-        latest = db.get_latest_scans(conn, target, limit=1)
+        latest = (db.get_latest_scans(conn, target, limit=1, completed_only=True)
+                  or db.get_latest_scans(conn, target, limit=1))
         if not latest:
             print(f"error: no scans found for {target!r}. Run `marsadix scan {target}` first.",
                   file=sys.stderr)

@@ -111,14 +111,13 @@ foreach ($tool in $tools) {
   }
 }
 
-# --- assetfinder, amass, chaos, alterx, massdns, puredns: Go tools, installed with `go install` so we
+# --- assetfinder, amass, chaos, alterx, puredns: Go tools, installed with `go install` so we
 #     never have to guess a release-asset filename for them. Needs Go.
 $goTools = @(
   @{ Name = "assetfinder"; Module = "github.com/tomnomnom/assetfinder@latest" },
   @{ Name = "amass";       Module = "github.com/owasp-amass/amass/v4/...@master" },
   @{ Name = "chaos";       Module = "github.com/projectdiscovery/chaos-client/cmd/chaos@latest" },
   @{ Name = "alterx";      Module = "github.com/projectdiscovery/alterx/cmd/alterx@latest" },
-  @{ Name = "massdns";     Module = "github.com/blechschmidt/massdns/bin/massdns@latest" },
   @{ Name = "puredns";     Module = "github.com/d3mondev/puredns/v2/cmd/puredns@latest" }
 )
 
@@ -155,6 +154,22 @@ foreach ($gt in $goTools) {
     Write-Host "[$t] FAILED: $($_.Exception.Message)" -ForegroundColor Red
     $failed += $t
   }
+}
+
+# --- massdns: a C program, NOT a Go module (`go install` can never produce it), and the
+#     project ships no official Windows binary. puredns (DNS bruteforce) needs it.
+#     So this script does not try to build it. Options:
+#       1. WSL / Linux:  bash scripts/install-tools.sh     (builds massdns from source)
+#       2. Docker:       docker build -t marsadix .         (massdns is built inside the image)
+#       3. If you already built massdns.exe yourself (Cygwin/MSYS2), put it in $InstallDir or PATH.
+#     Without massdns, Marsadix simply skips the DNS bruteforce step.
+$massdnsExe = Join-Path $InstallDir "massdns.exe"
+if ((Test-Path $massdnsExe) -or (Get-Command massdns -ErrorAction SilentlyContinue)) {
+  Write-Host "[massdns] already there" -ForegroundColor Yellow
+  $ok += "massdns"
+} else {
+  Write-Host "[massdns] SKIPPED: C program with no official Windows build - use WSL or Docker (see comment in this script)" -ForegroundColor Yellow
+  $failed += "massdns"
 }
 
 # --- findomain: not a Go tool (it's Rust), so it can't use `go install`.

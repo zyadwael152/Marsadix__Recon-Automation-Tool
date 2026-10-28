@@ -129,7 +129,7 @@ def _previous_scan(conn, target: str, exclude_scan_id: int) -> Optional[dict]:
     return dict(row) if row else None
 
 
-def run_stage(ctx) -> None:
+def run_stage(ctx) -> Optional[dict]:
     """
     Pipeline stage "track". Called once, automatically, after recon/web/asm
     for every scan. Two things:
@@ -144,8 +144,24 @@ def run_stage(ctx) -> None:
     target = ctx.target
     cur_id = ctx.scan.id
 
+    # Integrity first: a broken scan must not rewrite the asset history. An empty or
+    # partial result from a failed recon stage looks exactly like "everything
+    # disappeared" and would raise a false REMOVED_ASSET alert for every host.
+    recon = next((r for r in getattr(ctx, "stage_results", []) if r.name == "recon"), None)
+    if recon is not None and recon.status == "failed":
+        reason = ("recon stage failed; asset tracking skipped so that missing results "
+                  "are not mistaken for removed assets")
+        log.warning("track: %s", reason)
+        return {"skipped": reason}
+    degraded = list(getattr(ctx, "degraded_tools", None) or [])
+    if degraded:
+        log.warning("track: scan #%s is incomplete (%s); new assets are still recorded, "
+                    "but disappearances are NOT reported", cur_id, ", ".join(
+                        f"{r.tool}:{r.status}" for r in degraded))
+
     cur_hosts = [r["host"] for r in db.get_assets(conn, cur_id) if r["in_scope"]]
-    new_hosts, gone_hosts, is_baseline = db.update_tracked_assets(conn, target, cur_hosts, cur_id)
+    new_hosts, gone_hosts, is_baseline = db.update_tracked_assets(
+        conn, target, cur_hosts, cur_id, allow_removals=not degraded)
 
     if is_baseline:
         log.info("track: baseline scan for %s (%d hosts), no new-asset alerts", target, len(cur_hosts))
@@ -190,6 +206,9 @@ def run_stage(ctx) -> None:
             priority=default_priority(AlertType.NEW_PORT),
             channel=AlertChannel.DISCORD,
         )
+        # The default key (type|cve|host|technology|channel) has no port in it, so the
+        # SECOND new port on a host was silently dropped as a "duplicate" of the first.
+        alert.dedup_key = f"{alert.dedup_key}|{port}"
         if db.save_alert_if_new(conn, alert):
             log.info("track: new port alert queued for %s", entry)
 
@@ -245,10 +264,12 @@ def run_snapshots(conn, target: str) -> int:
 def run_diff(conn, target: str, old_id: Optional[int] = None, new_id: Optional[int] = None) -> int:
     """Entry point for `marsadix diff`. Returns a process exit code."""
     if old_id is None and new_id is None:
-        scans = db.get_latest_scans(conn, target, limit=2)
+        # failed / interrupted scans are partial data: diffing against them reports
+        # phantom removals and phantom new findings.
+        scans = db.get_latest_scans(conn, target, limit=2, completed_only=True)
         if len(scans) < 2:
             print(f"error: need at least 2 scans of {target!r} to diff "
-                  f"(found {len(scans)}). Run `marsadix scan {target}` again first.",
+                  f"(found {len(scans)} completed). Run `marsadix scan {target}` again first.",
                   file=sys.stderr)
             return 1
         new_id, old_id = scans[0]["id"], scans[1]["id"]

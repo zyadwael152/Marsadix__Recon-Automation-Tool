@@ -222,9 +222,17 @@ class SchemaVersionError(RuntimeError):
 
 
 def connect(path: str = "marsadix.db") -> sqlite3.Connection:
-    conn = sqlite3.connect(path)
+    # timeout: wait up to 30 s for another process (e.g. `marsadix monitor` running
+    # while a scan writes) to release the lock instead of failing after sqlite's 5 s.
+    conn = sqlite3.connect(path, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 30000")
+    try:
+        # WAL: readers no longer block the writer and vice versa.
+        conn.execute("PRAGMA journal_mode = WAL")
+    except sqlite3.DatabaseError:
+        pass                                    # e.g. a filesystem that cannot do WAL: keep the default
     return conn
 
 
@@ -354,11 +362,16 @@ def mark_alert_sent(conn, dedup_key: str) -> None:
 
 # ------------------------------------------------- new-subdomain tracking (diff)
 
-def update_tracked_assets(conn, target: str, hosts: Iterable[str], scan_id: int):
+def update_tracked_assets(conn, target: str, hosts: Iterable[str], scan_id: int,
+                          allow_removals: bool = True):
     """
     Call after each scan with the hosts found (resolved + in scope).
     Returns (new_hosts, disappeared_hosts, is_baseline).
     First ever scan of a target = baseline: nothing is reported as 'new'.
+
+    allow_removals=False: the scan was incomplete (a tool timed out/crashed), so a
+    host that is merely missing from it is NOT evidence that it is gone. Nothing
+    is marked inactive and no disappearance is reported.
     """
     hosts = set(hosts)
     now = utcnow()
@@ -374,7 +387,7 @@ def update_tracked_assets(conn, target: str, hosts: Iterable[str], scan_id: int)
     for h in hosts & known:
         conn.execute("UPDATE tracked_assets SET last_seen=?, is_active=1, last_scan_id=? "
                      "WHERE target=? AND host=?", (now, scan_id, target, h))
-    gone = sorted(known - hosts)
+    gone = sorted(known - hosts) if allow_removals else []
     for h in gone:
         conn.execute("UPDATE tracked_assets SET is_active=0 WHERE target=? AND host=?",
                      (target, h))
@@ -590,7 +603,10 @@ def get_pending_alerts(conn) -> list[sqlite3.Row]:
     return conn.execute("SELECT * FROM alerts WHERE delivered=0").fetchall()
 
 
-def get_latest_scans(conn, target: str, limit: int = 2) -> list[sqlite3.Row]:
+def get_latest_scans(conn, target: str, limit: int = 2,
+                     completed_only: bool = False) -> list[sqlite3.Row]:
+    """Newest scans first. completed_only=True skips failed / interrupted / running ones."""
+    where = "target=? AND status='completed'" if completed_only else "target=?"
     return conn.execute(
-        "SELECT * FROM scans WHERE target=? ORDER BY started_at DESC, id DESC LIMIT ?",
+        f"SELECT * FROM scans WHERE {where} ORDER BY started_at DESC, id DESC LIMIT ?",  # nosec B608
         (target, limit)).fetchall()

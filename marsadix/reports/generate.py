@@ -95,13 +95,17 @@ def _preliminary_posture_score(findings: list[dict]) -> int:
 
 def _gather(conn, target: str, scan_id: Optional[int]) -> Optional[dict]:
     if scan_id is None:
-        latest = db.get_latest_scans(conn, target, limit=1)
+        # The report describes the latest COMPLETED scan: a failed/interrupted one is
+        # partial data. Only if nothing ever completed do we fall back to the newest.
+        latest = (db.get_latest_scans(conn, target, limit=1, completed_only=True)
+                  or db.get_latest_scans(conn, target, limit=1))
         if not latest:
             return None
         scan_id = latest[0]["id"]
 
     scan_row = conn.execute("SELECT * FROM scans WHERE id=?", (scan_id,)).fetchone()
-    if scan_row is None:
+    if scan_row is None or str(scan_row["target"]).lower() != target.lower():
+        # an id from another target would build a report titled `target` out of someone else's data
         return None
 
     findings = [dict(r) for r in db.get_findings(conn, scan_id)]

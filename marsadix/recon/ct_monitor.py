@@ -13,6 +13,35 @@ logger = logging.getLogger(__name__)
 CERTSTREAM_URL = "wss://certstream.calidog.io/"
 
 
+class BoundedSeen:
+    """
+    A set that remembers only the newest `maxlen` hosts. The CT monitor runs for
+    days; an unbounded set of every host ever seen grows until the process dies.
+    An evicted host that shows up again is simply reported again (harmless).
+    """
+
+    def __init__(self, maxlen: int = 200_000):
+        from collections import OrderedDict
+        self._d = OrderedDict()
+        self.maxlen = maxlen
+
+    def __contains__(self, host) -> bool:
+        return host in self._d
+
+    def __len__(self) -> int:
+        return len(self._d)
+
+    def add(self, host) -> None:
+        self._d[host] = None
+        self._d.move_to_end(host)
+        while len(self._d) > self.maxlen:
+            self._d.popitem(last=False)
+
+    def update(self, hosts) -> None:
+        for h in hosts:
+            self.add(h)
+
+
 def _new_hosts_from_message(data, domain: str, seen: set) -> list:
     """
     In-scope host names in one CertStream message that were not seen before.
@@ -56,7 +85,7 @@ async def monitor_ct_logs(domain: str, output_file: Optional[str] = None):
         return
     logger.info("[*] Starting continuous CT Log monitoring for: *.%s (R14)", domain)
     logger.info("[*] Listening to global certificate streams... Press Ctrl+C to stop.")
-    seen = set()
+    seen = BoundedSeen()
     if output_file:
         try:
             with open(output_file, "r", encoding="utf-8") as existing:

@@ -294,6 +294,13 @@ marsadix scan example.com --scope scope.txt
 marsadix report example.com --out output
 ```
 
+## 🔑 API keys and secrets
+
+- **Where:** in a `.env` file next to where you run Marsadix (`cp .env.example .env`), or as real environment variables (CI, `docker run --env-file .env`). **Never** in `config.toml`, the code, or git. `.env` is git-ignored.
+- **How the code gets them:** `core/config.py` reads them once into the `Config` object inside the Marsadix process. Real environment variables win over `.env`. A key left empty means that source is skipped, never an error.
+- **What external tools see:** nothing by default. Every tool Marsadix starts (subfinder, nmap, katana ...) gets a minimal environment (`core/childenv.py`), not the parent's. A tool that really needs a key receives only that key (chaos gets `PDCP_API_KEY`). HTTP data sources (VirusTotal, Censys ...) are called from inside Marsadix, which sends the key as a header.
+- **Hygiene:** `chmod 600 .env`; use a separate low-privilege key per service; rotate any key that was ever committed (git history keeps it); prefer a secret manager in CI. Shodan's API takes the key in the query string, so it can show up in proxy logs: use a dedicated key for it.
+
 ## 🤝 Contributing
 
 Potential contribution areas include:

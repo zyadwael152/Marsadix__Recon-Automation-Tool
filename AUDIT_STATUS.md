@@ -58,7 +58,7 @@ This audit is based on the repository snapshot in `/mnt/d/DEPI/Marsadix` (HEAD `
 
 ### Web and ASM
 
-- `gau` is not integrated into URL collection; current Web stage uses `httpx` and `katana`.
+- `gau` IS integrated (web/stage.py, scope-filtered, bounded output). The old note saying otherwise was stale.
 - JS file recording is partial; parsing JavaScript for endpoints/subdomains, JS library versions and public emails is not implemented as a complete pipeline.
 - Screenshot capture (`gowitness`), WAF detection (`wafw00f`), security-header scoring, exposed-panel checks, JS secret scanning, TLS analysis and email-security posture checks are not integrated.
 - The ASM stage is absent. Nuclei execution/configuration, injection detection, ffuf fuzzing, custom detection skills, source attribution and three-state result generation are not implemented end-to-end, even though some model/report fields and OWASP mappings exist.
@@ -86,3 +86,19 @@ This audit is based on the repository snapshot in `/mnt/d/DEPI/Marsadix` (HEAD `
 4. Implement the CVE monitor runner and alert delivery.
 5. Complete report exports, graph queries/visualization and reproducible benchmarks.
 6. Run real-tool integration tests only against local labs or explicitly authorized targets, then build and smoke-test Docker on Linux and Windows-compatible setup paths.
+
+
+## Second pass (review patch) - fixed
+
+- **Scope (katana):** crawling is limited to each seed's own host (`-fs fqdn`) instead of the whole root domain, so it can no longer visit hosts the scope file excludes. Residual risk: redirects off the seed host are decided by katana itself; verify with `katana -h` for your installed version.
+- **Secrets:** `.env` no longer writes into `os.environ`; every child process gets a minimal allow-listed environment (`core/childenv.py`) plus only the explicit key it needs.
+- **Process lifecycle:** one safe runner (`core/aproc.py`) - timeout, kill of the whole process group on timeout/cancel/Ctrl+C, partial output kept, stdout capped. Used by discovery and `recon/_proc.py`; `web/probe.py` got the same kill-on-cancel and cap.
+- **Concurrency / timeouts:** `max_concurrent_tools` (default 8) bounds simultaneous tools; `tool_timeout` is now a hard cap on every external tool (recon included).
+- **Tool status:** `core/toolstatus.py` records ok/failed/timeout/truncated/missing per tool; saved to `output/<target>_scan<id>_tools.json`; stages show "incomplete: ..." in the scan summary.
+- **Tracking integrity:** the track stage is skipped when recon failed, and disappearances are neither recorded nor alerted when the scan was incomplete.
+- **Alerts:** the new-port alert key includes the port (only the first new port per host used to alert).
+- **Reports/diff:** default scan = latest COMPLETED scan; a scan id from another target is rejected.
+- **SQLite:** WAL + 30 s busy timeout. **CT monitor:** bounded seen-set. **dnsx parser:** bad records are skipped. **crt.sh:** response size capped.
+- **Installers:** massdns is no longer `go install`ed on Windows (C program; WSL/Docker/manual); getent/macOS fallback; `MARSADIX_<TOOL>_VERSION` pins a Go tool; installed versions are written to `marsadix-tool-versions.txt`.
+
+Still open from this pass: checksum verification of downloaded binaries; pinned default versions; per-tool status shown inside the HTML report.

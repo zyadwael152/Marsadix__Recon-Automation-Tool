@@ -1,59 +1,68 @@
 import asyncio
 import json
 import logging
-import os
 import re
 import urllib.request
 from typing import Set, List, Dict, Tuple
 from .api_sources import fetch_virustotal, fetch_alienvault, fetch_shodan, fetch_censys
+from ..core import limits, toolstatus
+from ..core.aproc import run_exec
 from .merger import merge_and_track
 
 logger = logging.getLogger(__name__)
 
 # Validate tool output as hostnames rather than dropping names based on their
 # appearance. Long or numeric labels can be real assets (VPNs, CDNs, build IDs).
+CRTSH_MAX_BYTES = 50 * 1024 * 1024
 _HOSTNAME_RE = re.compile(r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*\.?$", re.IGNORECASE)
 
 async def run_cli_tool(tool_name: str, command: List[str], timeout: int = 120,
                        env_overrides: dict | None = None) -> Tuple[str, Set[str]]:
-    subdomains = set()
-    logger.info(f"[*] Running {tool_name}...")
-    process = None
-    try:
-        child_env = os.environ.copy()
-        if env_overrides:
-            child_env.update({str(k): str(v) for k, v in env_overrides.items() if v is not None})
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=child_env,
-        )
-        communicate_task = asyncio.create_task(process.communicate())
-        try:
-            stdout, _ = await asyncio.wait_for(asyncio.shield(communicate_task), timeout=timeout)
-        except asyncio.TimeoutError:
-            # Keep communicate alive to drain pipes, kill the process, then retain
-            # anything written before the timeout instead of silently losing it.
-            process.kill()
-            await process.wait()
-            try:
-                stdout, _ = await communicate_task
-            except Exception:
-                stdout = b""
-            logger.warning(f"[-] {tool_name} timed out after {timeout}s; preserving partial output.")
+    """
+    Run one subdomain tool and return (name, hostnames).
 
-        if stdout:
-            for line in stdout.decode(errors="replace").splitlines():
-                sub = line.strip().lower().rstrip(".")
-                # Ignore status/log lines and malformed output, but don't use a
-                # heuristic that silently discards legitimate numeric/long names.
-                if sub and _HOSTNAME_RE.fullmatch(sub):
-                    subdomains.add(sub)
-        logger.info(f"[+] {tool_name} discovered {len(subdomains)} subdomains.")
+    * The child gets a minimal environment (core/childenv) plus ONLY the entries
+      in `env_overrides` (e.g. chaos' own key) - never the parent's secrets.
+    * At most `max_concurrency` tools run at once; timeout never exceeds the
+      user's tool_timeout; partial output is kept on timeout.
+    * The outcome (ok / timeout / failed / missing) is recorded in
+      core/toolstatus so "found nothing" and "tool broke" are no longer the same.
+    """
+    subdomains: Set[str] = set()
+    logger.info(f"[*] Running {tool_name}...")
+    timeout = limits.cap_timeout(timeout)
+    try:
+        async with limits.slot():
+            res = await run_exec(command, timeout=timeout, env_extra=env_overrides)
+    except FileNotFoundError:
+        logger.info(f"[-] {tool_name} is not installed - skipped.")
+        toolstatus.record(tool_name, "missing")
+        return tool_name, subdomains
     except Exception as e:
         logger.warning(f"[-] Skipped {tool_name} due to error: {e}")
-    
+        toolstatus.record(tool_name, "failed", type(e).__name__)
+        return tool_name, subdomains
+
+    for line in res.stdout.decode(errors="replace").splitlines():
+        sub = line.strip().lower().rstrip(".")
+        # Ignore status/log lines and malformed output, but don't use a
+        # heuristic that silently discards legitimate numeric/long names.
+        if sub and _HOSTNAME_RE.fullmatch(sub):
+            subdomains.add(sub)
+
+    if res.timed_out:
+        logger.warning(f"[-] {tool_name} timed out after {timeout:g}s; preserving partial output.")
+        toolstatus.record(tool_name, "timeout", f"after {timeout:g}s, kept {len(subdomains)} host(s)")
+    elif res.truncated:
+        logger.warning(f"[-] {tool_name} exceeded the output limit; stopped and kept {len(subdomains)} host(s).")
+        toolstatus.record(tool_name, "truncated", f"kept {len(subdomains)} host(s)")
+    elif res.returncode not in (0, None):
+        err = res.stderr.decode(errors="replace").strip().splitlines()
+        logger.warning(f"[-] {tool_name} exited with code {res.returncode}: {err[-1][:200] if err else 'no output'}")
+        toolstatus.record(tool_name, "failed", f"exit {res.returncode}, kept {len(subdomains)} host(s)")
+    else:
+        toolstatus.record(tool_name, "ok")
+    logger.info(f"[+] {tool_name} discovered {len(subdomains)} subdomains.")
     return tool_name, subdomains
 
 async def run_chaos(domain: str, api_key: str = None) -> Tuple[str, Set[str]]:
@@ -79,15 +88,21 @@ async def fetch_crtsh(domain: str) -> Tuple[str, Set[str]]:
             # socket until GC, once per scan.
             # Fixed https URL built above; no user-controlled scheme/host.
             with urllib.request.urlopen(req, timeout=45) as response:  # nosec B310
-                return response.status, response.read()
+                # bounded: a huge answer must not be loaded into memory whole
+                return response.status, response.read(CRTSH_MAX_BYTES + 1)
 
         # رفع مهلة الانتظار إلى 45 ثانية لتجنب مشاكل بطء سيرفر crt.sh
         status, body = await loop.run_in_executor(None, _fetch)
+        if len(body) > CRTSH_MAX_BYTES:
+            logger.warning("[-] crt.sh answer exceeded %d MB; skipped (cannot parse a cut-off JSON).", CRTSH_MAX_BYTES // 2**20)
+            toolstatus.record("crt.sh", "truncated", "answer too large")
+            return "crt.sh", subdomains
 
         if status == 200:
             data = json.loads(body.decode(errors="replace"))
             if not isinstance(data, list):
                 logger.warning("[-] crt.sh returned an unexpected JSON shape; skipped.")
+                toolstatus.record("crt.sh", "failed", "unexpected JSON shape")
                 return "crt.sh", subdomains
             for entry in data:
                 if not isinstance(entry, dict):
@@ -98,9 +113,14 @@ async def fetch_crtsh(domain: str) -> Tuple[str, Set[str]]:
                     # استبعاد الـ Wildcards والدومينات العشوائية الضخمة
                     if sub and not sub.startswith('*') and _HOSTNAME_RE.fullmatch(sub):
                         subdomains.add(sub)
+        if status != 200:
+            toolstatus.record("crt.sh", "failed", f"HTTP {status}")
+        else:
+            toolstatus.record("crt.sh", "ok")
         logger.info(f"[+] crt.sh discovered {len(subdomains)} clean subdomains.")
     except Exception as e:
         logger.warning(f"[-] Skipped crt.sh due to error (Server slow or timeout): {e}")
+        toolstatus.record("crt.sh", "failed", type(e).__name__)
         
     return "crt.sh", subdomains
 
@@ -143,7 +163,10 @@ async def _async_discover_recursive(domain: str, api_keys: dict, max_depth: int)
         
         # حماية إضافية: لو عدد الأهداف تجاوز 100 في العمق التاني، نكتفي بهم لمنع الـ Explosion
         if len(targets_to_scan) > 100:
+            dropped = len(targets_to_scan) - 100
             logger.warning(f"[-] Target list exceeded 100 items at depth {depth}. Limiting recursion batch to first 100 sorted targets.")
+            # Not silent: those hosts are not expanded, so this scan is incomplete.
+            toolstatus.record("recursion", "truncated", f"depth {depth}: {dropped} target(s) not expanded")
             targets_to_scan = set(sorted(targets_to_scan)[:100])
 
         tasks = [_async_discover_single(t, api_keys) for t in sorted(targets_to_scan)]

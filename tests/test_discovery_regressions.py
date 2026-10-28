@@ -68,7 +68,7 @@ def test_crtsh_response_is_closed_and_parsed(monkeypatch):
         def __exit__(self, *exc):
             closed["value"] = True
 
-        def read(self):
+        def read(self, amount=None):
             return (b'[{"name_value":"a.example.com\\n*.example.com\\n"},'
                     b' "not-an-object", {"name_value":"b.example.com"}]')
 

@@ -17,25 +17,54 @@ roughly 2N", and pick a lower number for fragile targets.
 import asyncio
 import json
 import logging
+import os
 from contextlib import suppress
 from typing import List, Optional, Set
 
+from ..core import limits, toolstatus
+from ..core.aproc import MAX_OUTPUT_BYTES, kill_process
+from ..core.childenv import child_env
+
 logger = logging.getLogger(__name__)
+
+
+# New process group (POSIX) so that kill_process() also stops anything the tool spawned.
+_SPAWN_EXTRA = {"start_new_session": True} if os.name == "posix" else {}
 
 
 def _rate_args(rate_limit: Optional[int]) -> List[str]:
     return ["-rl", str(int(rate_limit))] if rate_limit else []
 
 
-async def _read_all(stream, sink: List[bytes]) -> None:
-    """Drain one pipe into `sink` until EOF (or until the task is cancelled)."""
+async def _read_all(stream, sink: List[bytes], limit: Optional[int] = None, on_limit=None) -> None:
+    """
+    Drain one pipe into `sink` until EOF (or until the task is cancelled).
+
+    `limit`: stop storing after this many bytes (the tool is stopped through
+    `on_limit`) so a tool that prints gigabytes cannot exhaust memory. The pipe
+    is still drained so the tool never blocks on a full pipe.
+    """
     if stream is None:
         return
+    size = 0
+    capped = False
     while True:
         chunk = await stream.read(65536)
         if not chunk:
             return
-        sink.append(chunk)
+        if limit is not None:
+            room = limit - size
+            if room <= 0:
+                chunk = b""
+            elif len(chunk) > room:
+                chunk = chunk[:room]
+            if not capped and size + len(chunk) >= limit:
+                capped = True
+                if on_limit is not None:
+                    on_limit()
+        if chunk:
+            sink.append(chunk)
+            size += len(chunk)
 
 
 async def _feed_stdin(process, input_data: bytes) -> None:
@@ -68,8 +97,9 @@ async def _communicate_with_partial(process, input_data: bytes, timeout: int):
     stdout_parts: List[bytes] = []
     stderr_parts: List[bytes] = []
     readers = [
-        asyncio.create_task(_read_all(process.stdout, stdout_parts)),
-        asyncio.create_task(_read_all(process.stderr, stderr_parts)),
+        asyncio.create_task(_read_all(process.stdout, stdout_parts, MAX_OUTPUT_BYTES,
+                                      lambda: kill_process(process))),
+        asyncio.create_task(_read_all(process.stderr, stderr_parts, 1024 * 1024)),
     ]
     writer = asyncio.create_task(_feed_stdin(process, input_data))
     timed_out = False
@@ -77,9 +107,14 @@ async def _communicate_with_partial(process, input_data: bytes, timeout: int):
         await asyncio.wait_for(process.wait(), timeout=timeout)
     except asyncio.TimeoutError:
         timed_out = True
-        with suppress(ProcessLookupError):
-            process.kill()
+        kill_process(process)
         await process.wait()
+    except BaseException:
+        # Cancelled (Ctrl+C, the scan was aborted): the tool must not outlive us.
+        kill_process(process)
+        with suppress(BaseException):
+            await asyncio.wait_for(process.wait(), timeout=5)
+        raise
     finally:
         if not writer.done():
             writer.cancel()
@@ -95,6 +130,18 @@ async def _communicate_with_partial(process, input_data: bytes, timeout: int):
                 task.cancel()
             await asyncio.gather(*readers, return_exceptions=True)
     return b"".join(stdout_parts), b"".join(stderr_parts), timed_out
+
+
+def _record_exec(name: str, process, stdout: bytes, stderr: bytes, timed_out: bool) -> None:
+    """Tell core/toolstatus how the run went (timeout / output cut off / crash / ok)."""
+    if timed_out:
+        toolstatus.record(name, "timeout", f"{len(stdout)} bytes of output kept")
+    elif len(stdout) >= MAX_OUTPUT_BYTES:
+        toolstatus.record(name, "truncated", "output limit reached")
+    elif getattr(process, "returncode", None) not in (0, None) and not stdout.strip():
+        toolstatus.record(name, "failed", f"exit {getattr(process, 'returncode', None)}")
+    else:
+        toolstatus.record(name, "ok")
 
 
 GAU_MAX_URLS = 100_000
@@ -118,10 +165,11 @@ async def run_gau(domain: str, timeout: int = 180) -> Optional[List[str]]:
         process = await asyncio.create_subprocess_exec(
             "gau", domain, "--subs", "--threads", "5", "--timeout", "30", "--retries", "2",
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
-            limit=1024 * 1024,
+            limit=1024 * 1024, env=child_env(), **_SPAWN_EXTRA,
         )
     except Exception as exc:
         logger.warning("[-] Could not start gau: %s", type(exc).__name__)
+        toolstatus.record("gau", "failed", f"could not start: {type(exc).__name__}")
         return []
 
     urls = set()
@@ -138,8 +186,7 @@ async def run_gau(domain: str, timeout: int = 180) -> Optional[List[str]]:
             output_bytes += len(line)
             if output_bytes > GAU_MAX_OUTPUT_BYTES or len(urls) >= GAU_MAX_URLS:
                 truncated = True
-                with suppress(ProcessLookupError):
-                    process.kill()
+                kill_process(process)
                 break
             raw = line.decode("utf-8", errors="replace").strip()
             if not raw or len(raw) > 16_384:
@@ -159,20 +206,27 @@ async def run_gau(domain: str, timeout: int = 180) -> Optional[List[str]]:
             except ValueError:
                 continue
 
+    timed_out = False
     try:
-        await asyncio.wait_for(collect(), timeout=max(1, int(timeout)))
+        await asyncio.wait_for(collect(), timeout=max(1, int(limits.cap_timeout(timeout))))
     except asyncio.TimeoutError:
-        truncated = True
-        with suppress(ProcessLookupError):
-            process.kill()
+        truncated = timed_out = True
+        kill_process(process)
+    except BaseException:
+        kill_process(process)                 # cancelled: do not leave gau running
+        raise
     finally:
-        with suppress(Exception):
+        with suppress(BaseException):
             await asyncio.wait_for(process.wait(), timeout=5)
 
     if truncated:
         logger.warning("[-] gau output was bounded by timeout/size limits; retaining %d URL(s).", len(urls))
+        toolstatus.record("gau", "timeout" if timed_out else "truncated", f"kept {len(urls)} URL(s)")
     elif process.returncode not in (0, None):
         logger.warning("[-] gau exited with code %s; retaining %d URL(s).", process.returncode, len(urls))
+        toolstatus.record("gau", "failed", f"exit {process.returncode}, kept {len(urls)} URL(s)")
+    else:
+        toolstatus.record("gau", "ok")
     logger.info("[+] gau collected %d archived URL(s).", len(urls))
     return sorted(urls)
 
@@ -203,9 +257,11 @@ async def run_httpx(domains: List[str], rate_limit: Optional[int] = None,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=child_env(), **_SPAWN_EXTRA,
         )
         stdout, stderr, timed_out = await _communicate_with_partial(
-            process, input_data, timeout)
+            process, input_data, limits.cap_timeout(timeout))
+        _record_exec("httpx", process, stdout, stderr, timed_out)
         if timed_out:
             logger.warning("[-] httpx timed out after %ss - parsing %d partial output byte(s).",
                            timeout, len(stdout))
@@ -234,8 +290,12 @@ async def run_httpx(domains: List[str], rate_limit: Optional[int] = None,
             })
 
         logger.info("[+] httpx found %d live web servers.", len(live))
+    except FileNotFoundError:
+        logger.info("[-] httpx is not installed - web probing skipped.")
+        toolstatus.record("httpx", "missing")
     except Exception as e:
         logger.error("[-] httpx failed: %s", e)
+        toolstatus.record("httpx", "failed", type(e).__name__)
 
     return live
 
@@ -253,13 +313,20 @@ async def run_katana(urls: List[str], rate_limit: Optional[int] = None,
 
     try:
         process = await asyncio.create_subprocess_exec(
-            "katana", "-silent", "-jc", "-d", "2", *_rate_args(rate_limit),
+            "katana", "-silent", "-jc", "-d", "2",
+            # Stay on each seed's OWN host. katana's default (-fs rdn) follows links to
+            # ANY subdomain of the root domain, including hosts the scope file excludes
+            # (!admin.example.com) - and the request is sent before we can filter.
+            "-fs", "fqdn",
+            *_rate_args(rate_limit),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=child_env(), **_SPAWN_EXTRA,
         )
         stdout, stderr, timed_out = await _communicate_with_partial(
-            process, input_data, timeout)
+            process, input_data, limits.cap_timeout(timeout))
+        _record_exec("katana", process, stdout, stderr, timed_out)
         if timed_out:
             logger.warning("[-] katana timed out after %ss - parsing %d partial output byte(s).",
                            timeout, len(stdout))
@@ -273,7 +340,11 @@ async def run_katana(urls: List[str], rate_limit: Optional[int] = None,
                 endpoints.add(url)
 
         logger.info("[+] Katana extracted %d unique endpoints/URLs.", len(endpoints))
+    except FileNotFoundError:
+        logger.info("[-] katana is not installed - crawling skipped.")
+        toolstatus.record("katana", "missing")
     except Exception as e:
         logger.error("[-] Katana failed: %s", e)
+        toolstatus.record("katana", "failed", type(e).__name__)
 
     return sorted(endpoints)

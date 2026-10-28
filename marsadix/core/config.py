@@ -36,6 +36,7 @@ ENV_MAP = {
     # Recon tuning
     "MARSADIX_DNS_RATE_LIMIT": "dns_rate_limit",
     "MARSADIX_MAX_PERMUTATIONS": "max_permutations",
+    "MARSADIX_MAX_CONCURRENT_TOOLS": "max_concurrent_tools",
     "MARSADIX_BRUTEFORCE_WORDLIST": "bruteforce_wordlist",
     "MARSADIX_RESOLVERS_FILE": "resolvers_file",
     # CVE sources
@@ -61,7 +62,8 @@ class Config:
     output_dir: str = "output"
     max_depth: int = 2            # recursion depth limit
     rate_limit: int = 50          # requests/second handed to the tools
-    tool_timeout: int = 600       # seconds allowed per external tool
+    tool_timeout: int = 600       # hard upper bound (seconds) for ANY single external tool
+    max_concurrent_tools: int = 8  # external tool processes allowed to run at the same time
     scan_mode: str = "passive"    # passive | standard | full               (C15)
     allow_injection: bool = False  # explicit opt-in for injection checks   (A5)
 
@@ -98,6 +100,8 @@ class Config:
             raise ConfigError("rate_limit must be >= 1")
         if self.tool_timeout < 1:
             raise ConfigError("tool_timeout must be >= 1")
+        if self.max_concurrent_tools < 1:
+            raise ConfigError("max_concurrent_tools must be >= 1")
         if self.scan_mode not in SCAN_MODES:
             raise ConfigError(f"scan_mode must be one of {SCAN_MODES}")
         if self.dns_rate_limit < 0:
@@ -110,24 +114,28 @@ class Config:
         return bool(getattr(self, f"{name}_api_key", ""))
 
 
-def load_dotenv(path: str = ".env") -> None:
+def load_dotenv(path: str = ".env") -> dict:
     """
-    Tiny .env reader (KEY=VALUE). Real environment variables win.
+    Tiny .env reader (KEY=VALUE). Returns {name: value} for the variables
+    Marsadix knows (ENV_MAP). Real environment variables win (see load_config).
 
-    Only the variables Marsadix knows (ENV_MAP) are read. It used to copy EVERY
-    line into the process environment, and every external tool the scan starts
-    inherits that environment: a .env in the current directory could set
-    LD_PRELOAD (code execution), HTTPS_PROXY (traffic interception),
-    PYTHONSTARTUP, PATH-like variables... so running Marsadix inside a folder you
-    did not create was unsafe.
+    It deliberately does NOT write into os.environ. Every external tool a scan
+    starts used to inherit os.environ, so every API key from .env was handed to
+    every tool (subfinder, nmap, katana ...). Now the keys live only in the Config
+    object inside the Marsadix process; a child tool receives a minimal
+    environment (core/childenv.py) plus, at most, the one key it needs.
+
+    Unknown variables (LD_PRELOAD, HTTPS_PROXY, PYTHONSTARTUP ...) are ignored and
+    only their NAMES are logged, never their values.
     """
     p = Path(path)
     if not p.is_file():
-        return
+        return {}
     try:
         text = read_text(p)
     except (ValueError, OSError) as e:
         raise ConfigError(f"cannot read {path}: {e}") from e
+    values: dict = {}
     ignored = []
     for raw in text.splitlines():
         line = raw.strip()
@@ -140,15 +148,16 @@ def load_dotenv(path: str = ".env") -> None:
         if key not in ENV_MAP:
             ignored.append(key)
             continue
-        os.environ.setdefault(key, value.strip().strip('"').strip("'"))
+        values.setdefault(key, value.strip().strip('"').strip("'"))
     if ignored:
         log.warning("%s: ignoring unknown variable(s): %s (only Marsadix's own settings are read)",
                     path, ", ".join(sorted(set(ignored))))
+    return values
 
 
 def load_config(path: Optional[str] = None) -> Config:
     """Load config. `path` None -> use ./config.toml if it exists."""
-    load_dotenv()
+    dotenv = load_dotenv()
     cfg = Config()
     known = {f.name: f for f in fields(Config)}
 
@@ -178,7 +187,7 @@ def load_config(path: Optional[str] = None) -> Config:
         raise ConfigError(f"config file not found: {path}")
 
     for env, name in ENV_MAP.items():
-        raw = os.environ.get(env)
+        raw = os.environ.get(env) or dotenv.get(env)
         if not raw:
             continue
         want = type(getattr(cfg, name))

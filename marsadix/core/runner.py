@@ -17,7 +17,10 @@ import shutil
 import subprocess  # nosec B404
 import time
 from dataclasses import dataclass
-from typing import Optional, Sequence
+from typing import Mapping, Optional, Sequence
+
+from . import toolstatus
+from .childenv import child_env
 
 log = logging.getLogger(__name__)
 
@@ -72,11 +75,13 @@ def run_tool(
     input_text: Optional[str] = None,
     check: bool = False,
     cwd: Optional[str] = None,
+    env_extra: Optional[Mapping[str, Optional[str]]] = None,
 ) -> ToolResult:
     cmd = [str(c) for c in cmd]
     if not cmd:
         raise ValueError("empty command")
     if find_tool(cmd[0]) is None:
+        toolstatus.record(cmd[0], "missing")
         raise ToolNotFound(
             f"'{cmd[0]}' is not installed or not in PATH. Run `marsadix doctor`.")
 
@@ -86,6 +91,8 @@ def run_tool(
         p = subprocess.run(
             cmd, input=input_text, capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=timeout, cwd=cwd,
+            # minimal environment: the child never sees Marsadix's API keys
+            env=child_env(env_extra),
             # argv list, never a shell string
             shell=False,  # nosec B603
         )
@@ -97,6 +104,13 @@ def run_tool(
         log.warning("%s timed out after %ss", cmd[0], timeout)
         res = ToolResult(cmd, -1, _s(e.stdout), _s(e.stderr),
                          time.monotonic() - start, timed_out=True)
+
+    if res.timed_out:
+        toolstatus.record(cmd[0], "timeout", f"after {timeout}s, {len(res.stdout)} bytes kept")
+    elif res.returncode != 0 and not res.stdout.strip():
+        toolstatus.record(cmd[0], "failed", f"exit {res.returncode}")
+    else:
+        toolstatus.record(cmd[0], "ok")
 
     if check and not res.ok:
         reason = "timed out" if res.timed_out else f"exit code {res.returncode}"

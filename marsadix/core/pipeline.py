@@ -19,11 +19,12 @@ db.save_many(ctx.conn, "assets", [...]).
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Optional
 
 from .. import db
 from ..models import Scan, ScanMode, ScanStatus
+from . import limits, toolstatus
 from .config import SCAN_MODES, Config, ConfigError
 from .loader import load_callable
 from .scope import Scope, ScopeError, normalize_host
@@ -46,6 +47,13 @@ class Context:
     scan: Scan
     scope: Scope
     config: Config
+    # Filled in by the pipeline while it runs, so a later stage (track/diff) can
+    # tell a complete scan from a broken or partial one:
+    #   stage_results  - StageResult of every stage that already finished
+    #   degraded_tools - external tools/sources whose output may be INCOMPLETE
+    #                    (timed out, crashed, output cut off); see core/toolstatus
+    stage_results: list = field(default_factory=list)
+    degraded_tools: list = field(default_factory=list)
 
     @property
     def target(self) -> str:
@@ -161,7 +169,10 @@ def run_scan(target: str, config: Config, scope: Optional[Scope] = None,
         log.info("scan #%s started: %s (baseline=%s, mode=%s)", scan.id, host, first, resolved_mode)
 
         ctx = Context(conn=conn, scan=scan, scope=scope, config=run_config)
-        results = []
+        results = ctx.stage_results
+        toolstatus.reset()
+        limits.configure(tool_timeout=run_config.tool_timeout,
+                         max_concurrency=run_config.max_concurrent_tools)
         for name, path in STAGES:
             try:
                 fn = load_callable(path)
@@ -186,7 +197,16 @@ def run_scan(target: str, config: Config, scope: Optional[Scope] = None,
             except Exception as e:  # one broken stage must not kill the scan
                 log.exception("stage '%s' failed", name)
                 results.append(StageResult(name, "failed", f"{type(e).__name__}: {e}"))
+            # An "ok" stage can still have lost data (a tool timed out, crashed ...).
+            ctx.degraded_tools = toolstatus.degraded()
+            if ctx.degraded_tools and results and results[-1].status == "ok" and not results[-1].detail:
+                results[-1].detail = "incomplete: " + toolstatus.summary(ctx.degraded_tools)
 
+        if toolstatus.runs():
+            import os
+            from .textfile import safe_filename
+            toolstatus.write_json(os.path.join(
+                run_config.output_dir, f"{safe_filename(host)}_scan{scan.id}_tools.json"))
         failed = any(r.status == "failed" for r in results)
         db.finish_scan(conn, scan.id, "failed" if failed else "completed")
         scan.status = ScanStatus.FAILED if failed else ScanStatus.COMPLETED
