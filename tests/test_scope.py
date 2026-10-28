@@ -145,6 +145,13 @@ def test_scope_files_written_by_windows_tools_load(tmp_path, label, data):
     assert sc.is_in_scope("example.com") and sc.is_in_scope("www.example.com"), label
 
 
+def test_from_target_accepts_ip_targets_without_inventing_a_wildcard():
+    for target in ("1.2.3.4", "::1"):
+        sc = Scope.from_target(target)
+        assert sc.is_in_scope(target)
+        assert sc.wildcards == set()
+
+
 def test_an_undecodable_scope_file_is_a_scope_error_not_a_traceback(tmp_path):
     f = tmp_path / "scope.txt"
     f.write_bytes(b"example.com\n\xff\xfe\xfa\n")

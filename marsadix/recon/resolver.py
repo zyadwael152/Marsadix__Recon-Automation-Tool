@@ -41,7 +41,7 @@ GENERATED_SOURCES = frozenset({"alterx", "permutation", "puredns", "wordlist"})
 
 async def _lookup_all(host: str) -> List[str]:
     """All IPv4 and IPv6 addresses for host via the OS resolver, or []."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         records = await asyncio.wait_for(
             loop.run_in_executor(None, socket.getaddrinfo, host, None, 0, socket.SOCK_STREAM),
@@ -72,6 +72,8 @@ def parse_dnsx_json(text: str) -> Dict[str, dict]:
         try:
             data = json.loads(line)
         except ValueError:
+            continue
+        if not isinstance(data, dict):
             continue
         host = (data.get("host") or "").strip().lower().rstrip(".")
         # dnsx can return A and AAAA in separate arrays; keep both address families.
@@ -116,7 +118,8 @@ async def detect_wildcard_ips(domain: str, probes: int = WILDCARD_PROBES) -> Set
     """IPs that random, surely-nonexistent names under `domain` resolve to."""
     ips: Set[str] = set()
     for _ in range(probes):
-        label = "".join(random.choices(string.ascii_lowercase + string.digits, k=16))
+        # DNS labels do not need a cryptographic RNG.
+        label = "".join(random.choices(string.ascii_lowercase + string.digits, k=16))  # nosec B311
         ips.update(await _lookup_all(f"{label}.{domain}"))
     return ips
 

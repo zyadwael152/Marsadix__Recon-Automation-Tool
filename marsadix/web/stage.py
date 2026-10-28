@@ -34,6 +34,7 @@ from urllib.parse import urlsplit
 from .. import db
 from ..core import netguard
 from ..core.scope import normalize_host
+from ..core.textfile import safe_filename
 from ..models import Confidence, DiscoverySource, Technology, WebItem, WebItemKind
 from . import fingerprint
 from .probe import run_httpx, run_katana
@@ -176,10 +177,11 @@ def run(ctx, *args, **kwargs) -> dict:
     # ---- plain-text copies (output_dir, which .gitignore already covers)
     out_dir = ctx.config.output_dir
     os.makedirs(out_dir, exist_ok=True)
+    stem = safe_filename(ctx.target)
     if live_urls:
-        _write_lines(os.path.join(out_dir, f"{ctx.target}_live_urls.txt"), live_urls)
+        _write_lines(os.path.join(out_dir, f"{stem}_live_urls.txt"), live_urls)
     if endpoints:
-        _write_lines(os.path.join(out_dir, f"{ctx.target}_endpoints.txt"), endpoints)
+        _write_lines(os.path.join(out_dir, f"{stem}_endpoints.txt"), endpoints)
 
     return {"live_urls": live_urls, "endpoints": endpoints, "stored": stored,
             "technologies": tech_stored}

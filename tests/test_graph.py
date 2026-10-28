@@ -245,6 +245,25 @@ def test_rebuild_drops_stale_graph_rows(conn):
     assert "ip:2.2.2.2" not in ids
 
 
+def test_a_failed_rebuild_keeps_the_previous_graph(conn, monkeypatch):
+    """The rebuild deletes first; a mid-build error must not commit the hole."""
+    scan = _mk_scan(conn, "example.com")
+    db.save_many(conn, "assets", [Asset(scan_id=scan.id, host="a.example.com", in_scope=True)])
+    first = build_graph(conn, scan.id)
+    assert first["nodes"] > 0
+
+    def boom(*a, **k):
+        raise RuntimeError("database went away")
+
+    monkeypatch.setattr(db, "get_findings", boom)
+    with pytest.raises(RuntimeError):
+        build_graph(conn, scan.id)
+
+    after = db.get_graph(conn, scan.id)
+    assert len(after["nodes"]) == first["nodes"]
+    assert len(after["edges"]) == first["edges"]
+
+
 def test_build_graph_counts_match_what_get_graph_returns(conn):
     scan = _mk_scan(conn)
     _seed(conn, scan.id)

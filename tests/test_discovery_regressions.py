@@ -42,6 +42,44 @@ def test_recursion_requires_a_domain_label_boundary(monkeypatch):
     assert "evilexample.com" not in calls
 
 
+def test_chaos_key_is_passed_as_pdcp_api_key(monkeypatch):
+    seen = {}
+
+    async def fake_run(tool, command, timeout=120, env_overrides=None):
+        seen.update(tool=tool, env=env_overrides)
+        return tool, set()
+
+    monkeypatch.setattr(discovery, "run_cli_tool", fake_run)
+    asyncio.run(discovery.run_chaos("example.com", "secret-key"))
+
+    assert seen["tool"] == "chaos"
+    assert seen["env"] == {"PDCP_API_KEY": "secret-key"}
+
+
+def test_crtsh_response_is_closed_and_parsed(monkeypatch):
+    closed = {"value": False}
+
+    class _Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            closed["value"] = True
+
+        def read(self):
+            return (b'[{"name_value":"a.example.com\\n*.example.com\\n"},'
+                    b' "not-an-object", {"name_value":"b.example.com"}]')
+
+    monkeypatch.setattr(discovery.urllib.request, "urlopen", lambda *a, **k: _Response())
+    tool, hosts = asyncio.run(discovery.fetch_crtsh("example.com"))
+
+    assert tool == "crt.sh"
+    assert hosts == {"a.example.com", "b.example.com"}
+    assert closed["value"]
+
+
 def test_unknown_technology_does_not_get_an_invented_cpe():
     assert generate_cpe("HSTS") is None
     assert generate_cpe("Apache HTTP Server") is None

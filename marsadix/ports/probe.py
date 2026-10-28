@@ -8,7 +8,8 @@ tool installed.
 """
 
 import logging
-import xml.etree.ElementTree as ET
+# Parses local nmap output only; entity declarations are rejected below.
+import xml.etree.ElementTree as ET  # nosec B405
 from typing import Optional
 
 from ..core.runner import parse_json_lines, run_tool
@@ -68,7 +69,9 @@ def parse_nmap_xml(xml_text: str) -> list:
         log.warning("[-] nmap XML contains entity declarations: ignored")
         return []
     try:
-        root = ET.fromstring(xml_text[xml_text.index("<?xml"):] if "<?xml" in xml_text else xml_text)
+        # Entity declarations were rejected just above.
+        root = ET.fromstring(  # nosec B314
+            xml_text[xml_text.index("<?xml"):] if "<?xml" in xml_text else xml_text)
     except ET.ParseError as e:
         log.warning("[-] could not parse nmap XML: %s", e)
         return []

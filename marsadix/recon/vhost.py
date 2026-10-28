@@ -6,8 +6,7 @@ internal applications or unlinked staging environments.
 
 import logging
 import json
-import asyncio
-from typing import List, Set, Optional
+from typing import Set, Optional
 from ._proc import run_async
 
 logger = logging.getLogger(__name__)
@@ -18,7 +17,7 @@ async def discover_vhosts(ip: str, domain: str, wordlist_path: str, rate_limit: 
     """
     Runs ffuf to fuzz the Host header against a specific IP.
     """
-    if not ip or not wordlist_path:
+    if not ip or not domain or not wordlist_path:
         return set()
 
     logger.info(f"[*] Running VHost discovery on IP: {ip} for domain: {domain} (R16)...")
@@ -49,9 +48,20 @@ async def discover_vhosts(ip: str, domain: str, wordlist_path: str, rate_limit: 
         # ffuf outputs a single JSON block at the end when using -of json
         data = json.loads(out)
         for result in data.get("results", []):
-            host_val = result.get("host", "")
-            if host_val:
-                vhosts.add(host_val)
+            if not isinstance(result, dict):
+                continue
+            # ffuf's "host" is the request target (the IP we fuzzed), NOT the
+            # virtual host that answered. The discovered name is the FUZZ
+            # payload, in result["input"]["FUZZ"]. Returning result["host"]
+            # made every candidate an IP, which the caller's scope check then
+            # discarded -- so VHost discovery silently stored nothing.
+            payload = result.get("input")
+            fuzz = payload.get("FUZZ") if isinstance(payload, dict) else None
+            if not isinstance(fuzz, str) or not fuzz.strip():
+                continue
+            candidate = f"{fuzz.strip().lower()}.{domain}".strip(".")
+            if candidate:
+                vhosts.add(candidate)
     except Exception as e:
         logger.warning(f"[-] Failed to parse ffuf JSON output: {e}")
 

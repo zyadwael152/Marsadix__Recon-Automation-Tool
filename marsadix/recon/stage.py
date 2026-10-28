@@ -13,6 +13,7 @@ from .vhost import discover_vhosts              # R16
 from .. import db
 from ..models import Asset, DiscoverySource
 from ..core import netguard
+from ..core.scope import valid_hostname
 
 logger = logging.getLogger(__name__)
 
@@ -178,7 +179,9 @@ def run(ctx, *args, **kwargs) -> dict:
     # recon, but it is stored as asset evidence instead of silently discarded.
     # Port scanning and HTTP probing are owned by their dedicated pipeline stages
     # to avoid duplicate requests in --mode full.
-    if allows_std and wordlist:
+    # VHost fuzzing builds "<word>.<target>" host names, which only makes sense
+    # for a domain target (an IP target would produce "word.1.2.3.4").
+    if allows_std and wordlist and valid_hostname(target):
         non_cdn_public_ips = sorted({
             info["ip"] for host, info in active_results.items()
             if info.get("ip") and host_ok(host)

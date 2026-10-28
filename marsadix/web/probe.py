@@ -26,7 +26,8 @@ def _rate_args(rate_limit: Optional[int]) -> List[str]:
     return ["-rl", str(int(rate_limit))] if rate_limit else []
 
 
-async def run_httpx(domains: List[str], rate_limit: Optional[int] = None) -> List[dict]:
+async def run_httpx(domains: List[str], rate_limit: Optional[int] = None,
+                    timeout: int = 300) -> List[dict]:
     """
     Probe hosts with httpx (-td technology detection, -server header; CDN
     detection is on by default). Returns one record per live web server:
@@ -52,7 +53,17 @@ async def run_httpx(domains: List[str], rate_limit: Optional[int] = None) -> Lis
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, _ = await process.communicate(input=input_data)
+        try:
+            stdout, _ = await asyncio.wait_for(
+                process.communicate(input=input_data), timeout=timeout)
+        except asyncio.TimeoutError:
+            # Cancelling communicate() does not stop the child: without kill()
+            # a hung httpx keeps running (and holding the pipe) after the
+            # stage has moved on.
+            process.kill()
+            await process.wait()
+            logger.warning("[-] httpx timed out after %ss - using partial results.", timeout)
+            return live
 
         for line in stdout.decode(errors="replace").splitlines():
             try:
@@ -81,7 +92,8 @@ async def run_httpx(domains: List[str], rate_limit: Optional[int] = None) -> Lis
     return live
 
 
-async def run_katana(urls: List[str], rate_limit: Optional[int] = None) -> List[str]:
+async def run_katana(urls: List[str], rate_limit: Optional[int] = None,
+                     timeout: int = 300) -> List[str]:
     """Crawl live URLs with katana (JS parsing on, depth 2). Returns unique URLs found."""
     if not urls:
         return []
@@ -98,7 +110,14 @@ async def run_katana(urls: List[str], rate_limit: Optional[int] = None) -> List[
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, _ = await process.communicate(input=input_data)
+        try:
+            stdout, _ = await asyncio.wait_for(
+                process.communicate(input=input_data), timeout=timeout)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            logger.warning("[-] katana timed out after %ss - using partial results.", timeout)
+            return sorted(endpoints)
 
         for line in stdout.decode(errors="replace").splitlines():
             url = line.strip()

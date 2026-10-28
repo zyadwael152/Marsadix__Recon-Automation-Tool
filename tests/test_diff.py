@@ -5,8 +5,7 @@ from marsadix.core.diff import compute_diff, get_target_timeline, run_diff, run_
 from marsadix.core.pipeline import Context
 from marsadix.core.scope import Scope
 from marsadix.models import (
-    Asset, DiscoverySource, Finding, FindingSource, Scan, ScanStatus, Service,
-    Severity, Technology,
+    Asset, Finding, FindingSource, Scan, ScanStatus, Service, Technology,
 )
 
 
@@ -69,8 +68,47 @@ def test_run_diff_needs_two_scans(conn, capsys):
     assert "need at least 2 scans" in capsys.readouterr().err
 
 
-def test_run_diff_prints_report(conn, capsys):
+def test_scans_started_in_the_same_second_are_ordered_by_id(conn):
+    """started_at has one-second resolution, so ties are common in fast runs."""
     old = _mk_scan(conn, "example.com", is_baseline=True)
+    new = _mk_scan(conn, "example.com")
+    conn.execute("UPDATE scans SET started_at='2026-01-01T00:00:00+00:00'")
+    conn.commit()
+
+    assert [r["id"] for r in db.get_latest_scans(conn, "example.com")] == [new.id, old.id]
+    from marsadix.core.diff import _previous_scan
+    assert _previous_scan(conn, "example.com", new.id)["id"] == old.id
+    assert [t["scan_id"] for t in get_target_timeline(conn, "example.com")] == [old.id, new.id]
+
+
+def test_old_only_compares_with_the_next_scan(conn, capsys):
+    first = _mk_scan(conn, "example.com", is_baseline=True)
+    second = _mk_scan(conn, "example.com")
+    _mk_scan(conn, "example.com")                  # a newer scan must be ignored
+    db.save_many(conn, "assets", [Asset(scan_id=second.id, host="new.example.com", in_scope=True)])
+
+    assert run_diff(conn, "example.com", old_id=first.id) == 0
+    out = capsys.readouterr().out
+    assert f"scan #{first.id} -> scan #{second.id}" in out
+    assert "new.example.com" in out
+
+
+def test_diff_refuses_scans_from_another_target(conn, capsys):
+    a = _mk_scan(conn, "example.com", is_baseline=True)
+    b = _mk_scan(conn, "other.com")
+
+    assert run_diff(conn, "example.com", old_id=a.id, new_id=b.id) == 1
+    assert "must belong to" in capsys.readouterr().err
+
+
+def test_diff_refuses_the_same_scan_twice(conn, capsys):
+    scan = _mk_scan(conn, "example.com", is_baseline=True)
+    assert run_diff(conn, "example.com", old_id=scan.id, new_id=scan.id) == 1
+    assert "must be different" in capsys.readouterr().err
+
+
+def test_run_diff_prints_report(conn, capsys):
+    _mk_scan(conn, "example.com", is_baseline=True)
     new = _mk_scan(conn, "example.com")
     db.save_many(conn, "assets", [Asset(scan_id=new.id, host="new.example.com", in_scope=True)])
 

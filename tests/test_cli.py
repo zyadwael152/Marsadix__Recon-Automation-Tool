@@ -246,3 +246,34 @@ def test_a_garbage_scope_file_is_a_one_line_error(tmp_path, capsys):
     rc = main(["--no-banner", "--db", str(tmp_path / "t.db"), "scan", "example.com", "--mode", "standard", "--scope", str(f)])
     err = capsys.readouterr().err
     assert rc == 1 and err.startswith("error: cannot read scope file") and "Traceback" not in err
+
+
+class _TrackingConn:
+    def __init__(self, conn):
+        self._conn = conn
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+        self._conn.close()
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+def test_db_commands_close_their_connection(tmp_path, monkeypatch, capsys):
+    """An unclosed SQLite handle keeps the file locked (notably on Windows)."""
+    real_connect = db.connect
+    opened = []
+
+    def tracking_connect(path):
+        conn = _TrackingConn(real_connect(path))
+        opened.append(conn)
+        return conn
+
+    monkeypatch.setattr("marsadix.cli.db.connect", tracking_connect)
+
+    # `graph` with no scans: opens the DB, reports the error, returns 1.
+    assert main(["--no-banner", "--db", str(tmp_path / "t.db"), "graph", "example.com"]) == 1
+    assert "no scans found" in capsys.readouterr().err
+    assert opened and all(c.closed for c in opened)

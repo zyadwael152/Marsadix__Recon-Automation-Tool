@@ -48,6 +48,7 @@ from typing import Optional
 
 from .. import db
 from ..core.diff import compute_diff
+from ..core.textfile import safe_filename as _safe_filename_component
 from ..models import utcnow
 from ..owasp import ALL_CATEGORIES
 
@@ -69,7 +70,7 @@ _STATUS_LABEL = {
 def _previous_completed_scan(conn, target: str, exclude_scan_id: int) -> Optional[dict]:
     row = conn.execute(
         "SELECT * FROM scans WHERE target=? AND id<>? AND status='completed' "
-        "ORDER BY started_at DESC LIMIT 1",
+        "ORDER BY started_at DESC, id DESC LIMIT 1",
         (target, exclude_scan_id)).fetchone()
     return dict(row) if row else None
 
@@ -132,7 +133,7 @@ def _gather(conn, target: str, scan_id: Optional[int]) -> Optional[dict]:
 # --------------------------------------------------------------------------
 
 def _write_json(data: dict, out_dir: Path, target: str, scan_id: int) -> Path:
-    path = out_dir / f"{target}_scan{scan_id}_report.json"
+    path = out_dir / f"{_safe_filename_component(target)}_scan{scan_id}_report.json"
     path.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
     return path
 
@@ -240,7 +241,8 @@ def _force_layout(nodes: list[dict], edges: list[dict],
     n = len(nodes)
     if iterations is None:
         iterations = 400 if n <= 150 else 200
-    rng = random.Random(42)
+    # Deterministic layout, not security-sensitive.
+    rng = random.Random(42)  # nosec B311
     pos = {nd["id"]: [rng.uniform(0, width), rng.uniform(0, height)] for nd in nodes}
     valid_ids = set(pos)
     k = math.sqrt((width * height) / max(n, 1))
@@ -603,7 +605,7 @@ def _assets_section(data: dict) -> str:
     if not assets:
         return ""
     return f'''
-  <section class="engagement-only" style="display:block">
+  <section>
     <h2>Assets</h2>
     <table>
       <thead><tr><th>Host</th><th>IP</th><th>In scope</th><th>Source confidence</th><th>ASN</th><th>CDN</th></tr></thead>
@@ -750,7 +752,7 @@ def _render_html(data: dict) -> str:
 
 
 def _write_html(data: dict, out_dir: Path, target: str, scan_id: int) -> Path:
-    path = out_dir / f"{target}_scan{scan_id}_report.html"
+    path = out_dir / f"{_safe_filename_component(target)}_scan{scan_id}_report.html"
     path.write_text(_render_html(data), encoding="utf-8")
     return path
 

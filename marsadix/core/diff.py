@@ -94,7 +94,7 @@ def get_target_timeline(conn, target: str) -> list[dict]:
     surface evolved scan over scan.
     """
     scans = conn.execute(
-        "SELECT * FROM scans WHERE target=? ORDER BY started_at ASC", (target,)
+        "SELECT * FROM scans WHERE target=? ORDER BY started_at ASC, id ASC", (target,)
     ).fetchall()
     timeline = []
     for s in scans:
@@ -121,7 +121,7 @@ def _previous_scan(conn, target: str, exclude_scan_id: int) -> Optional[dict]:
     """The most recent COMPLETED scan of `target` before `exclude_scan_id`."""
     row = conn.execute(
         "SELECT * FROM scans WHERE target=? AND id<>? AND status='completed' "
-        "ORDER BY started_at DESC LIMIT 1",
+        "ORDER BY started_at DESC, id DESC LIMIT 1",
         (target, exclude_scan_id)).fetchone()
     return dict(row) if row else None
 
@@ -183,7 +183,7 @@ def run_stage(ctx) -> None:
             alert_type=AlertType.NEW_PORT,
             host=host,
             title=f"New open port: {entry}",
-            details=f"Open in scan #{cur_id}, closed in scan #{prev['id']}",
+            details=f"Not open in scan #{prev['id']}; open in scan #{cur_id}",
             priority=default_priority(AlertType.NEW_PORT),
             channel=AlertChannel.DISCORD,
         )
@@ -241,20 +241,52 @@ def run_snapshots(conn, target: str) -> int:
 
 def run_diff(conn, target: str, old_id: Optional[int] = None, new_id: Optional[int] = None) -> int:
     """Entry point for `marsadix diff`. Returns a process exit code."""
-    if old_id is None or new_id is None:
+    if old_id is None and new_id is None:
         scans = db.get_latest_scans(conn, target, limit=2)
         if len(scans) < 2:
             print(f"error: need at least 2 scans of {target!r} to diff "
                   f"(found {len(scans)}). Run `marsadix scan {target}` again first.",
                   file=sys.stderr)
             return 1
-        new_id = new_id if new_id is not None else scans[0]["id"]
-        old_id = old_id if old_id is not None else scans[1]["id"]
+        new_id, old_id = scans[0]["id"], scans[1]["id"]
+    elif new_id is None:
+        # `--old N` alone means "compare N with the next scan after it". The
+        # old code took the newest scan, which could be older than N (a
+        # reversed diff) or N itself.
+        old_row = conn.execute(
+            "SELECT started_at FROM scans WHERE id=? AND target=?", (old_id, target)
+        ).fetchone()
+        if old_row is None:
+            print(f"error: scan id {old_id} not found for {target!r}", file=sys.stderr)
+            return 1
+        newer = conn.execute(
+            "SELECT id FROM scans WHERE target=? AND "
+            "(started_at > ? OR (started_at = ? AND id > ?)) "
+            "ORDER BY started_at ASC, id ASC LIMIT 1",
+            (target, old_row["started_at"], old_row["started_at"], old_id)).fetchone()
+        if newer is None:
+            print(f"error: no scan after #{old_id} for {target!r}", file=sys.stderr)
+            return 1
+        new_id = newer["id"]
+    elif old_id is None:
+        prev = _previous_scan(conn, target, new_id)
+        if prev is None:
+            print(f"error: no completed scan before #{new_id} for {target!r}", file=sys.stderr)
+            return 1
+        old_id = prev["id"]
 
-    old_row = conn.execute("SELECT id FROM scans WHERE id=?", (old_id,)).fetchone()
-    new_row = conn.execute("SELECT id FROM scans WHERE id=?", (new_id,)).fetchone()
-    if old_row is None or new_row is None:
+    if old_id == new_id:
+        print("error: --old and --new must be different scans", file=sys.stderr)
+        return 1
+
+    rows = {r["id"]: r["target"] for r in conn.execute(
+        "SELECT id, target FROM scans WHERE id IN (?, ?)", (old_id, new_id))}
+    if len(rows) != 2:
         print(f"error: scan id not found (old={old_id}, new={new_id})", file=sys.stderr)
+        return 1
+    if any(t != target for t in rows.values()):
+        print(f"error: both scans must belong to {target!r} "
+              f"(got {', '.join(sorted(set(rows.values())))})", file=sys.stderr)
         return 1
 
     diff = compute_diff(conn, old_id, new_id)

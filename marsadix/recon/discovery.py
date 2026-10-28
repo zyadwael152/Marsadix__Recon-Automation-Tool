@@ -4,9 +4,8 @@ import logging
 import os
 import re
 import urllib.request
-from functools import partial
 from typing import Set, List, Dict, Tuple
-from .api_sources import HTTP_TIMEOUT, fetch_virustotal, fetch_alienvault, fetch_shodan, fetch_censys
+from .api_sources import fetch_virustotal, fetch_alienvault, fetch_shodan, fetch_censys
 from .merger import merge_and_track
 
 logger = logging.getLogger(__name__)
@@ -62,25 +61,38 @@ async def run_chaos(domain: str, api_key: str = None) -> Tuple[str, Set[str]]:
         return "chaos", set()
     # ProjectDiscovery supports PDCP_API_KEY via environment; don't put secrets
     # in argv, where process listings can expose them to other local users.
+    # chaos-client reads PDCP_API_KEY (not CHAOS_API_KEY); passing the wrong
+    # name silently ran the queries unauthenticated.
     return await run_cli_tool("chaos", ["chaos", "-d", domain, "-silent"],
-                              env_overrides={"CHAOS_API_KEY": api_key})
+                              env_overrides={"PDCP_API_KEY": api_key})
 
 async def fetch_crtsh(domain: str) -> Tuple[str, Set[str]]:
     subdomains = set()
     url = f"https://crt.sh/?q=%25.{domain}&output=json"
     logger.info(f"[*] Querying crt.sh for {domain}...")
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        
+
+        def _fetch() -> Tuple[int, bytes]:
+            # The response must be closed explicitly; urlopen() alone leaks a
+            # socket until GC, once per scan.
+            # Fixed https URL built above; no user-controlled scheme/host.
+            with urllib.request.urlopen(req, timeout=45) as response:  # nosec B310
+                return response.status, response.read()
+
         # رفع مهلة الانتظار إلى 45 ثانية لتجنب مشاكل بطء سيرفر crt.sh
-        response = await loop.run_in_executor(
-            None, partial(urllib.request.urlopen, req, timeout=45))
-        
-        if response.status == 200:
-            data = json.loads(response.read().decode())
+        status, body = await loop.run_in_executor(None, _fetch)
+
+        if status == 200:
+            data = json.loads(body.decode(errors="replace"))
+            if not isinstance(data, list):
+                logger.warning("[-] crt.sh returned an unexpected JSON shape; skipped.")
+                return "crt.sh", subdomains
             for entry in data:
-                name_value = entry.get('name_value', '').lower()
+                if not isinstance(entry, dict):
+                    continue
+                name_value = str(entry.get('name_value', '')).lower()
                 for sub in name_value.split('\n'):
                     sub = sub.strip()
                     # استبعاد الـ Wildcards والدومينات العشوائية الضخمة

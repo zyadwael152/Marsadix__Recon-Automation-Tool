@@ -28,6 +28,31 @@ def test_generate_report_no_scan_returns_error(conn, capsys):
     assert "no completed scans found" in capsys.readouterr().err
 
 
+def test_report_target_cannot_escape_the_output_directory(conn, tmp_path):
+    # The CLI falls back to the raw argument when normalize_host() cannot
+    # parse it, so this is exactly what `marsadix report ../../evil` sends.
+    _mk_scan(conn, "../../evil", is_baseline=True)
+    out = tmp_path / "out"
+
+    assert generate_report(conn, "../../evil", fmt="both", out_dir=str(out)) == 0
+
+    written = list(out.iterdir())
+    assert written and all(p.parent == out for p in written)
+    assert list(tmp_path.glob("*.html")) == []      # nothing escaped to tmp_path
+
+
+@pytest.mark.parametrize("target,expected", [
+    ("example.com", "example.com"),
+    ("../../evil", "evil"),
+    ("..\\..\\evil", "evil"),
+    ("::1", "1"),
+    ("*.example.com", "example.com"),
+])
+def test_filename_component_is_safe(target, expected):
+    from marsadix.reports.generate import _safe_filename_component
+    assert _safe_filename_component(target) == expected
+
+
 def test_generate_report_writes_both_files(conn, tmp_path):
     scan = _mk_scan(conn, "example.com", is_baseline=True)
     db.save_many(conn, "assets", [Asset(scan_id=scan.id, host="api.example.com", in_scope=True)])
@@ -59,7 +84,7 @@ def test_generate_report_writes_both_files(conn, tmp_path):
 
 
 def test_generate_report_json_only(conn, tmp_path):
-    scan = _mk_scan(conn, "example.com", is_baseline=True)
+    _mk_scan(conn, "example.com", is_baseline=True)
     rc = generate_report(conn, "example.com", fmt="json", out_dir=str(tmp_path))
     assert rc == 0
     assert list(tmp_path.glob("*_report.json"))

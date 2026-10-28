@@ -15,8 +15,7 @@ import sqlite3
 from typing import Iterable, Optional
 
 from .models import (
-    Alert, Asset, AssetSource, CVE, Finding, MonitorState, Scan, Service,
-    Technology, TrackedAsset, WebItem, Email, utcnow,
+    Alert, AssetSource, CVE, MonitorState, Scan, TrackedAsset, utcnow,
 )
 
 SCHEMA_SQL = """
@@ -528,11 +527,12 @@ def count_graph_nodes_by_type(conn, scan_id: int) -> list[sqlite3.Row]:
 def get_neighbors(conn, node_id: str, scan_id: Optional[int] = None) -> list[dict]:
     """Direct neighbors of one node, for blast-radius / attack-path queries (G3/G4)."""
     scoped = scan_id is not None            # `if scan_id` would treat id 0 as "no scan"
+    # Fixed SQL with bound parameters; only "?" placeholders are concatenated.
     q = ("SELECT dst_id AS id, relation, 'out' AS direction FROM graph_edges "
-         "WHERE src_id=?" + (" AND scan_id=?" if scoped else "") +
+         "WHERE src_id=?" + (" AND scan_id=?" if scoped else "") +  # nosec B608
          " UNION ALL "
          "SELECT src_id AS id, relation, 'in' AS direction FROM graph_edges "
-         "WHERE dst_id=?" + (" AND scan_id=?" if scoped else ""))
+         "WHERE dst_id=?" + (" AND scan_id=?" if scoped else ""))  # nosec B608
     params = ([node_id, scan_id, node_id, scan_id] if scoped
               else [node_id, node_id])
     rows = conn.execute(q, params).fetchall()
@@ -592,5 +592,5 @@ def get_pending_alerts(conn) -> list[sqlite3.Row]:
 
 def get_latest_scans(conn, target: str, limit: int = 2) -> list[sqlite3.Row]:
     return conn.execute(
-        "SELECT * FROM scans WHERE target=? ORDER BY started_at DESC LIMIT ?",
+        "SELECT * FROM scans WHERE target=? ORDER BY started_at DESC, id DESC LIMIT ?",
         (target, limit)).fetchall()

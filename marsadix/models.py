@@ -170,7 +170,7 @@ class Asset(_Model):
     source: DiscoverySource = DiscoverySource.PASSIVE  # the FIRST/primary source
     parent_host: Optional[str] = None
     first_seen: str = field(default_factory=utcnow)
-    confidence_score: int = 0                     # 0-100, see compute_source_confidence (R4)
+    confidence_score: int = 0                     # 0-100, see recon.confidence.compute_source_confidence (R4)
 
 
 @dataclass
@@ -387,17 +387,6 @@ def default_priority(alert_type: AlertType) -> AlertPriority:
         AlertType.TAKEOVER: AlertPriority.HIGH,
         AlertType.CVE: AlertPriority.LOW,
     }[alert_type]
-
-
-def compute_source_confidence(source_count: int, resolved: bool, http_alive: bool) -> int:
-    """
-    0-100 confidence score for a discovered subdomain. (R4)
-    More independent sources + DNS resolution + a live HTTP response = higher confidence.
-    """
-    score = min(source_count * 20, 60)
-    score += 20 if resolved else 0
-    score += 20 if http_alive else 0
-    return score
 
 
 # --------------------------------------------------------------------------

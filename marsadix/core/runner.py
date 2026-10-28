@@ -13,7 +13,8 @@ from __future__ import annotations
 import json
 import logging
 import shutil
-import subprocess
+# subprocess is only used with shell=False and an argv list.
+import subprocess  # nosec B404
 import time
 from dataclasses import dataclass
 from typing import Optional, Sequence
@@ -85,7 +86,8 @@ def run_tool(
         p = subprocess.run(
             cmd, input=input_text, capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=timeout, cwd=cwd,
-            shell=False,
+            # argv list, never a shell string
+            shell=False,  # nosec B603
         )
         res = ToolResult(cmd, p.returncode, p.stdout or "", p.stderr or "",
                          time.monotonic() - start)

@@ -49,7 +49,8 @@ ENV_MAP = {
     "CHAOS_API_KEY": "chaos_api_key",
     # Alert channels (M12, M14, M18)
     "DISCORD_WEBHOOK_URL": "discord_webhook",
-    "TELEGRAM_BOT_TOKEN": "telegram_bot_token",
+    # This is the env var *name*, not a secret value.
+    "TELEGRAM_BOT_TOKEN": "telegram_bot_token",  # nosec B105
     "TELEGRAM_CHAT_ID": "telegram_chat_id",
     "WEBHOOK_URL": "webhook_url",
 }

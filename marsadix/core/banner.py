@@ -61,7 +61,8 @@ def enable_windows_ansi() -> None:
             mode = ctypes.c_ulong()
             if k32.GetConsoleMode(handle, ctypes.byref(mode)):
                 k32.SetConsoleMode(handle, mode.value | 0x0004)
-    except Exception:
+    # Best-effort console mode; failure here is harmless.
+    except Exception:  # nosec B110
         pass
 
 

@@ -102,6 +102,22 @@ def _n_finding(finding_id: int) -> str:
 
 def build_graph(conn, scan_id: int) -> dict:
     """
+    Rebuild one scan's graph atomically.
+
+    A failure half-way through used to leave the transaction open with the
+    old rows deleted and the new ones only partially written; the next commit
+    anywhere in the process then persisted that broken state. Roll back so
+    the previous graph (or nothing) survives, and let the caller report it.
+    """
+    try:
+        return _build_graph(conn, scan_id)
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+def _build_graph(conn, scan_id: int) -> dict:
+    """
     Read one scan's assets/services/technologies/findings and write the
     corresponding nodes/edges. Returns {"nodes": n, "edges": n} written
     (unique nodes / unique edges, so the numbers match what get_graph returns).

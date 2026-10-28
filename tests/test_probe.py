@@ -92,3 +92,36 @@ def test_a_missing_tool_is_logged_not_raised(monkeypatch):
     monkeypatch.setattr(probe.asyncio, "create_subprocess_exec", boom)
     assert asyncio.run(probe.run_httpx(["a.example.com"])) == []
     assert asyncio.run(probe.run_katana(["https://a.example.com"])) == []
+
+
+class _HangingProc:
+    """Never finishes on its own; records whether it was killed and reaped."""
+
+    def __init__(self):
+        self.killed = False
+        self.waited = False
+
+    async def communicate(self, input=None):
+        await asyncio.sleep(3600)
+
+    def kill(self):
+        self.killed = True
+
+    async def wait(self):
+        self.waited = True
+        return -9
+
+
+@pytest.mark.parametrize("runner,args", [
+    (probe.run_httpx, ["a.example.com"]),
+    (probe.run_katana, ["https://a.example.com"]),
+])
+def test_a_hung_tool_times_out_and_is_killed(monkeypatch, runner, args):
+    proc = _HangingProc()
+
+    async def fake_exec(*a, **k):
+        return proc
+
+    monkeypatch.setattr(probe.asyncio, "create_subprocess_exec", fake_exec)
+    assert asyncio.run(runner(args, timeout=0.01)) == []
+    assert proc.killed and proc.waited

@@ -124,27 +124,37 @@ def cmd_scan(a, cfg: Config) -> int:
     return 0 if scan.status.value == "completed" else 1
 
 
-def _optional(path: str, what: str, **kwargs):
+def _missing(path: str, what: str) -> int:
+    file = path.split(":")[0].replace(".", "/") + ".py"
+    print(f"{what} is not implemented yet (expected: {file}).", file=sys.stderr)
+    return EXIT_NOT_IMPLEMENTED
+
+
+def _db_command(path: str, what: str, cfg: Config, **kwargs):
+    """
+    Resolve `path`, open the database once, call it, and always close the
+    connection.
+
+    It used to load the module twice (once to test, once to call) and pass
+    `_open_db(cfg)` as an argument -- so the connection was opened even when
+    the module was missing, and was never closed. On Windows an unclosed
+    SQLite handle keeps the file locked for the rest of the process.
+    """
     fn = load_callable(path)
     if fn is None:
-        file = path.split(":")[0].replace(".", "/") + ".py"
-        print(f"{what} is not implemented yet (expected: {file}).", file=sys.stderr)
-        return EXIT_NOT_IMPLEMENTED
-    rc = fn(**kwargs)
+        return _missing(path, what)
+    conn = db.connect(cfg.db_path)
+    try:
+        db.init_db(conn)
+        rc = fn(conn=conn, **kwargs)
+    finally:
+        conn.close()
     return rc if isinstance(rc, int) else 0
 
 
-def _open_db(cfg: Config):
-    conn = db.connect(cfg.db_path)
-    db.init_db(conn)
-    return conn
-
-
 def cmd_monitor(a, cfg: Config) -> int:
-    if load_callable("marsadix.monitor.runner:run") is None:
-        return _optional("marsadix.monitor.runner:run", "monitor")
-    return _optional("marsadix.monitor.runner:run", "monitor", conn=_open_db(cfg),
-                     config=cfg, dry_run=a.dry_run, since=a.since)
+    return _db_command("marsadix.monitor.runner:run", "monitor", cfg,
+                       config=cfg, dry_run=a.dry_run, since=a.since)
 
 
 # 🆕 R14: Command implementation for CT stream monitoring
@@ -170,35 +180,27 @@ def cmd_ct_monitor(a, cfg: Config) -> int:
 
 def cmd_diff(a, cfg: Config) -> int:
     target = normalize_host(a.target) or a.target
-    if load_callable("marsadix.core.diff:run_diff") is None:
-        return _optional("marsadix.core.diff:run_diff", "diff")
-    return _optional("marsadix.core.diff:run_diff", "diff", conn=_open_db(cfg),
-                     target=target, old_id=a.old, new_id=a.new)
+    return _db_command("marsadix.core.diff:run_diff", "diff", cfg,
+                       target=target, old_id=a.old, new_id=a.new)
 
 
 def cmd_snapshots(a, cfg: Config) -> int:
     target = normalize_host(a.target) or a.target
-    if load_callable("marsadix.core.diff:run_snapshots") is None:
-        return _optional("marsadix.core.diff:run_snapshots", "snapshots")
-    return _optional("marsadix.core.diff:run_snapshots", "snapshots",
-                     conn=_open_db(cfg), target=target)
+    return _db_command("marsadix.core.diff:run_snapshots", "snapshots", cfg,
+                       target=target)
 
 
 def cmd_report(a, cfg: Config) -> int:
     target = normalize_host(a.target) or a.target
-    if load_callable("marsadix.reports.generate:generate_report") is None:
-        return _optional("marsadix.reports.generate:generate_report", "report")
-    return _optional("marsadix.reports.generate:generate_report", "report",
-                     conn=_open_db(cfg), target=target, fmt=a.format,
-                     out_dir=a.out or cfg.output_dir, scan_id=a.scan_id)
+    return _db_command("marsadix.reports.generate:generate_report", "report", cfg,
+                       target=target, fmt=a.format,
+                       out_dir=a.out or cfg.output_dir, scan_id=a.scan_id)
 
 
 def cmd_graph(a, cfg: Config) -> int:
     target = normalize_host(a.target) or a.target
-    if load_callable("marsadix.core.graph:run_graph") is None:
-        return _optional("marsadix.core.graph:run_graph", "graph")
-    return _optional("marsadix.core.graph:run_graph", "graph", conn=_open_db(cfg),
-                     target=target, scan_id=a.scan_id)
+    return _db_command("marsadix.core.graph:run_graph", "graph", cfg,
+                       target=target, scan_id=a.scan_id)
 
 
 def cmd_doctor(a, cfg: Config) -> int:

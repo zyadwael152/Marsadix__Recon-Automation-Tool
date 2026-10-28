@@ -26,7 +26,9 @@ SHODAN_PAGE_SIZE = 100
 def _request_json(url: str, headers: dict | None = None) -> Dict[str, Any]:
     """Fetch one JSON response, always closing the socket/response object."""
     req = urllib.request.Request(url, headers=headers or {})
-    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as response:
+    # Every caller uses a hardcoded https:// URL; pagination
+    # links are re-validated by _next_url_same_host (https + expected host).
+    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as response:  # nosec B310
         payload = response.read().decode("utf-8", errors="replace")
         data = json.loads(payload)
         if not isinstance(data, dict):
@@ -94,7 +96,8 @@ async def fetch_virustotal(domain: str, api_key: str = None) -> Tuple[str, Set[s
         for _ in range(MAX_API_PAGES):
             data = await _request_json_async(url, {"x-apikey": api_key})
             subdomains.update(_extract_names(data.get("data", []), domain))
-            next_url = (data.get("links") or {}).get("next")
+            links = data.get("links")
+            next_url = links.get("next") if isinstance(links, dict) else None
             if not next_url:
                 break
             safe_next = _next_url_same_host(next_url, "www.virustotal.com")
@@ -150,14 +153,20 @@ async def fetch_shodan(domain: str, api_key: str = None) -> Tuple[str, Set[str]]
             query = urllib.parse.urlencode({"SHODAN-API-KEY": api_key, "query": f"hostname:{domain}", "page": page})
             url = f"https://api.shodan.io/shodan/host/search?{query}"
             data = await _request_json_async(url)
-            for match in data.get("matches", []):
+            matches = data.get("matches")
+            matches = matches if isinstance(matches, list) else []
+            for match in matches:
                 if not isinstance(match, dict):
                     continue
-                for host in match.get("hostnames", []):
-                    if _under_domain(host, domain):
+                hostnames = match.get("hostnames")
+                for host in hostnames if isinstance(hostnames, list) else []:
+                    if isinstance(host, str) and _under_domain(host, domain):
                         subdomains.add(host.strip().lower().rstrip("."))
-            total = int(data.get("total", 0) or 0)
-            if not data.get("matches") or page * SHODAN_PAGE_SIZE >= total:
+            try:
+                total = int(data.get("total", 0) or 0)
+            except (TypeError, ValueError):
+                total = 0
+            if not matches or page * SHODAN_PAGE_SIZE >= total:
                 break
         logger.info("[+] Shodan discovered %d subdomains (up to %d pages).", len(subdomains), MAX_API_PAGES)
     except Exception as e:
@@ -183,10 +192,15 @@ async def fetch_censys(domain: str, api_key: str = None) -> Tuple[str, Set[str]]
                 params["cursor"] = cursor
             url = "https://search.censys.io/api/v2/hosts/search?" + urllib.parse.urlencode(params)
             data = await _request_json_async(url, {"Authorization": f"Bearer {api_key}"})
-            result = data.get("result") or {}
-            for hit in result.get("hits", []):
-                if isinstance(hit, dict):
-                    subdomains.update(_extract_names([{"id": name} for name in hit.get("names", [])], domain))
+            result = data.get("result")
+            result = result if isinstance(result, dict) else {}
+            hits = result.get("hits")
+            for hit in hits if isinstance(hits, list) else []:
+                if not isinstance(hit, dict):
+                    continue
+                names = hit.get("names")
+                subdomains.update(_extract_names(
+                    [{"id": name} for name in (names if isinstance(names, list) else [])], domain))
             links = data.get("links") or result.get("links") or {}
             next_value = links.get("next") if isinstance(links, dict) else None
             next_cursor = None

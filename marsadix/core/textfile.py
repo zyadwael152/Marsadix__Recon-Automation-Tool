@@ -7,7 +7,22 @@ with UnicodeDecodeError (UTF-16) or left a invisible "\\ufeff" glued to the
 first line (UTF-8 BOM), which then failed as an "invalid rule".
 """
 
+import re
 from pathlib import Path
+
+_UNSAFE_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def safe_filename(value: str) -> str:
+    """
+    Turn arbitrary text into a single, portable file-name component.
+
+    Targets reach file names after normalize_host(), which can still return an
+    IPv6 address (':') or a wildcard ('*') -- both invalid on Windows -- and
+    callers that skip validation can pass '../../x' directly.
+    """
+    safe = _UNSAFE_FILENAME_CHARS.sub("_", value or "").strip("._-")
+    return safe or "target"
 
 
 def read_text(path) -> str:

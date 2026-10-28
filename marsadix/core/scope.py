@@ -153,7 +153,10 @@ class Scope:
         t = normalize_host(target)
         if not t:
             raise ScopeError(f"invalid target: {target!r}")
-        return cls.from_lines([t, f"*.{t}"], source="target")
+        # An IP (including IPv6) has no subdomains; "*.::1" is not a valid
+        # rule and used to make `marsadix scan <ip>` fail in passive mode.
+        rules = [t, f"*.{t}"] if valid_hostname(t) else [t]
+        return cls.from_lines(rules, source="target")
 
     # ---------------------------------------------------------------- check
     def check(self, value: str) -> Decision:
