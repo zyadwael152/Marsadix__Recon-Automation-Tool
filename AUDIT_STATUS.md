@@ -102,3 +102,10 @@ This audit is based on the repository snapshot in `/mnt/d/DEPI/Marsadix` (HEAD `
 - **Installers:** massdns is no longer `go install`ed on Windows (C program; WSL/Docker/manual); getent/macOS fallback; `MARSADIX_<TOOL>_VERSION` pins a Go tool; installed versions are written to `marsadix-tool-versions.txt`.
 
 Still open from this pass: checksum verification of downloaded binaries; pinned default versions; per-tool status shown inside the HTML report.
+
+
+## Person 5 completion pass
+
+Done: C20 (CSV / SARIF / PDF), C18 (Executive summary, Scope & methodology, prioritized findings, tool status, print CSS), C17 (`timemachine`), C21 (`investigate`, `skills`, `benchmark`), C5c (skills registry), C5b (web + ports in parallel), C14 / C14b (benchmark commands).
+
+Still depends on other roles: per-finding Remediation text (needs the remediation database, M19: the report shows a placeholder and uses `marsadix/remediation.py:get_remediation(finding)` as soon as it exists); the skills themselves (asm stage, A1-A8: every skill is "planned" until it calls `register_handler`); real benchmark numbers (need a network and a lab target); C5 "real stage linking" is complete for recon/web/ports/track/graph, `asm` and `monitor` still have no stage.

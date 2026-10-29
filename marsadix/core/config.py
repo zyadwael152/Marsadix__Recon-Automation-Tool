@@ -64,6 +64,7 @@ class Config:
     rate_limit: int = 50          # requests/second handed to the tools
     tool_timeout: int = 600       # hard upper bound (seconds) for ANY single external tool
     max_concurrent_tools: int = 8  # external tool processes allowed to run at the same time
+    parallel_stages: bool = True   # run independent stages (web + ports) side by side (C5b)
     scan_mode: str = "passive"    # passive | standard | full               (C15)
     allow_injection: bool = False  # explicit opt-in for injection checks   (A5)
 

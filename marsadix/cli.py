@@ -87,13 +87,38 @@ def build_parser() -> argparse.ArgumentParser:
 
     r = sub.add_parser("report", help="generate HTML / JSON report")
     r.add_argument("target")
-    r.add_argument("--format", choices=["html", "json", "both"], default="both")
+    r.add_argument("--format", choices=["html", "json", "csv", "sarif", "pdf", "both", "all"], default="both",
+                   help="both = html + json (default); all = every format")
     r.add_argument("--out", metavar="DIR", help="output directory")
     r.add_argument("--scan-id", type=int)
 
     g = sub.add_parser("graph", help="Knowledge Graph summary for a target")
     g.add_argument("target")
     g.add_argument("--scan-id", type=int, help="defaults to the latest scan")
+
+    tm = sub.add_parser("timemachine", help="Attack Path Time Machine: how attack paths changed scan over scan")
+    tm.add_argument("target")
+    tm.add_argument("--last", type=int, metavar="N", help="only the last N completed scans")
+    tm.add_argument("--json", action="store_true", help="machine-readable output")
+
+    iv = sub.add_parser("investigate", help="everything known about one host of a target")
+    iv.add_argument("target")
+    iv.add_argument("host", help="a discovered host, e.g. api.example.com")
+    iv.add_argument("--scan-id", type=int, help="defaults to the latest completed scan")
+
+    sk = sub.add_parser("skills", help="list the detection skills (active / planned)")
+    sk.add_argument("--mode", choices=list(SCAN_MODES), default="full", help="show what would be active in this mode")
+
+    bm = sub.add_parser("benchmark", help="measure recon coverage or detection quality")
+    bsub = bm.add_subparsers(dest="bench", required=True)
+    br = bsub.add_parser("recon", help="subfinder alone vs Marsadix with all its sources (C14)")
+    br.add_argument("domain")
+    br.add_argument("--out", metavar="FILE", help="also write the result as JSON")
+    bd = bsub.add_parser("detection", help="Detection Rate and Precision on a training target (C14b)")
+    bd.add_argument("target")
+    bd.add_argument("--truth", required=True, metavar="FILE", help="ground-truth JSON (see benchmarks/truth/README.md)")
+    bd.add_argument("--scan-id", type=int, help="defaults to the latest completed scan")
+    bd.add_argument("--out", metavar="FILE", help="also write the result as JSON")
 
     sub.add_parser("doctor", help="check which external tools are installed")
 
@@ -203,6 +228,33 @@ def cmd_graph(a, cfg: Config) -> int:
                        target=target, scan_id=a.scan_id)
 
 
+def cmd_timemachine(a, cfg: Config) -> int:
+    target = normalize_host(a.target) or a.target
+    return _db_command("marsadix.core.attackpaths:run_timemachine", "timemachine", cfg,
+                       target=target, limit=a.last, as_json=a.json)
+
+
+def cmd_investigate(a, cfg: Config) -> int:
+    target = normalize_host(a.target) or a.target
+    return _db_command("marsadix.core.attackpaths:run_investigate", "investigate", cfg,
+                       target=target, host=a.host, scan_id=a.scan_id)
+
+
+def cmd_skills(a, cfg: Config) -> int:
+    from marsadix.skills import render_table
+    print(render_table(a.mode))
+    return 0
+
+
+def cmd_benchmark(a, cfg: Config) -> int:
+    from marsadix import benchmark
+    if a.bench == "recon":
+        return benchmark.run_recon_benchmark(a.domain, cfg, out_file=a.out)
+    target = normalize_host(a.target) or a.target
+    return _db_command("marsadix.benchmark:run_detection_benchmark", "benchmark", cfg,
+                       target=target, truth_file=a.truth, scan_id=a.scan_id, out_file=a.out)
+
+
 def cmd_doctor(a, cfg: Config) -> int:
     rows = tool_status()
     w = max(len(n) for n, _, _ in rows)
@@ -233,7 +285,8 @@ def cmd_scope(a, cfg: Config) -> int:
 
 COMMANDS = {"scan": cmd_scan, "monitor": cmd_monitor, "ct-monitor": cmd_ct_monitor,
             "diff": cmd_diff, "snapshots": cmd_snapshots, "report": cmd_report,
-            "graph": cmd_graph, "doctor": cmd_doctor, "scope": cmd_scope}
+            "graph": cmd_graph, "timemachine": cmd_timemachine, "investigate": cmd_investigate,
+            "skills": cmd_skills, "benchmark": cmd_benchmark, "doctor": cmd_doctor, "scope": cmd_scope}
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

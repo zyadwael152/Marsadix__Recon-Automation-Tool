@@ -158,8 +158,21 @@ marsadix scan example.com --scope scope.txt
 marsadix diff example.com
 marsadix diff example.com --old 3 --new 7
 
-# Generate the HTML + JSON report for the latest scan
+# Generate the HTML + JSON report for the latest completed scan
 marsadix report example.com --out output
+# ...or any of: html json csv sarif pdf both(default) all
+marsadix report example.com --format sarif --out output
+
+# Everything known about one host / how attack paths changed scan over scan
+marsadix investigate example.com api.example.com
+marsadix timemachine example.com --last 5
+
+# Which detection skills exist and which are active
+marsadix skills --mode full
+
+# Numbers instead of claims: subfinder alone vs Marsadix; detection rate on a lab target
+marsadix benchmark recon example.com --out recon_bench.json
+marsadix benchmark detection dvwa.lab --truth benchmarks/truth/dvwa.example.json
 
 # Show the stored knowledge graph / list every scan of a target
 marsadix graph example.com
@@ -236,8 +249,12 @@ The differences this project aims for are the combination of recursive recon wit
 - [x] Schema-version check with an actionable error message instead of a raw SQL error
 - [x] Knowledge Graph (link assets/services/technologies/CVEs; "what else shares this?" queries)
 - [x] `--mode passive/standard/full` enforcement and an explicit opt-in flag for injection checks
-- [ ] SARIF and PDF report export (CSV export is done)
-- [ ] Reproducible benchmarks against existing tools
+- [x] CSV, SARIF 2.1.0 and PDF report export (`marsadix report --format ...`)
+- [x] Benchmark commands: recon (subfinder vs Marsadix) and detection (Detection Rate / Precision against a labeled lab target)
+- [x] Web and port stages run side by side (`parallel_stages`)
+- [x] Detection Skills Registry (`marsadix skills`, listed in the report). Skills show as *planned* until their code exists
+- [x] `marsadix investigate` (one host, everything known) and `marsadix timemachine`
+- [ ] Published benchmark numbers (the commands exist; results need a network and your own run)
 
 ### Discovery and detection modules (built on the engine above)
 
@@ -256,7 +273,7 @@ The differences this project aims for are the combination of recursive recon wit
 - [ ] Import `.nessus` exports
 - [ ] Deeper network assessment module
 - [ ] Scheduled scans
-- [ ] Attack Path Time Machine (visualize how the attack surface evolved scan over scan)
+- [x] Attack Path Time Machine (text view: paths opened / closed between completed scans; graphical view not done)
 - [ ] Misconfiguration Pattern Hunter (cluster related findings into one root-cause issue instead of listing each separately)
 
 ## 🧪 Testing & evaluation

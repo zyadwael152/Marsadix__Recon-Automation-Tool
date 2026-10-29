@@ -1,6 +1,9 @@
 """
 Pipeline skeleton (Core role owns this file).
 
+Independent stages (web + ports: both only read the recon result and write their
+own tables) run at the same time (C5b); everything else runs in order.
+
 A *stage* is a function  run(ctx: Context) -> None  that lives in its owner's
 module. The pipeline calls the stages in order; a stage that doesn't exist yet
 is skipped, so everyone can plug in without touching this file:
@@ -19,6 +22,7 @@ db.save_many(ctx.conn, "assets", [...]).
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from typing import Optional
 
@@ -39,6 +43,23 @@ STAGES = [
     ("track", "marsadix.core.diff:run_stage"),
     ("graph", "marsadix.core.graph:run_stage"),
 ]
+
+
+# Stages that do not depend on each other and may run side by side. They must be
+# adjacent in STAGES. Each gets its own SQLite connection (WAL, see db.connect).
+PARALLEL_GROUPS = [("web", "ports")]
+
+
+def _plan(stages) -> list:
+    """Split STAGES into steps: a list of stages that run together, or a single stage."""
+    names = [n for n, _ in stages]
+    plan, i = [], 0
+    while i < len(stages):
+        grp = next((g for g in PARALLEL_GROUPS if tuple(names[i:i + len(g)]) == g), None)
+        n = len(grp) if grp else 1
+        plan.append(list(stages[i:i + n]))
+        i += n
+    return plan
 
 
 @dataclass
@@ -173,34 +194,19 @@ def run_scan(target: str, config: Config, scope: Optional[Scope] = None,
         toolstatus.reset()
         limits.configure(tool_timeout=run_config.tool_timeout,
                          max_concurrency=run_config.max_concurrent_tools)
-        for name, path in STAGES:
-            try:
-                fn = load_callable(path)
-            except Exception as e:      # the stage's own import is broken (e.g. a mistyped module name)
-                log.exception("stage '%s' could not be loaded", name)
-                results.append(StageResult(name, "failed", f"could not load {path}: {type(e).__name__}: {e}"))
-                continue
-            if fn is None:
-                log.info("stage '%s' not implemented yet, skipping", name)
-                results.append(StageResult(name, "skipped", f"{path} not found"))
-                continue
-            try:
-                log.info("stage '%s' started", name)
-                outcome = fn(ctx)
-                # A stage that deliberately did nothing (e.g. the mode forbids it)
-                # returns {"skipped": "<reason>"} so `marsadix scan` reports it as
-                # skipped instead of a misleading "ok".
-                if isinstance(outcome, dict) and outcome.get("skipped"):
-                    results.append(StageResult(name, "skipped", str(outcome["skipped"])))
-                else:
-                    results.append(StageResult(name, "ok"))
-            except Exception as e:  # one broken stage must not kill the scan
-                log.exception("stage '%s' failed", name)
-                results.append(StageResult(name, "failed", f"{type(e).__name__}: {e}"))
+        parallel_ok = getattr(run_config, "parallel_stages", True) and run_config.db_path != ":memory:"
+        for step in _plan(STAGES):
+            if len(step) > 1 and parallel_ok:
+                results.extend(_run_parallel(ctx, step, run_config.db_path))
+            else:
+                for name, path in step:
+                    results.append(_run_stage(ctx, name, path))
             # An "ok" stage can still have lost data (a tool timed out, crashed ...).
             ctx.degraded_tools = toolstatus.degraded()
-            if ctx.degraded_tools and results and results[-1].status == "ok" and not results[-1].detail:
-                results[-1].detail = "incomplete: " + toolstatus.summary(ctx.degraded_tools)
+            if ctx.degraded_tools:
+                for r in results[-len(step):]:
+                    if r.status == "ok" and not r.detail:
+                        r.detail = "incomplete: " + toolstatus.summary(ctx.degraded_tools)
 
         if toolstatus.runs():
             import os
@@ -219,6 +225,49 @@ def run_scan(target: str, config: Config, scope: Optional[Scope] = None,
         raise
     finally:
         conn.close()
+
+
+def _run_stage(ctx, name: str, path: str) -> "StageResult":
+    """Run one stage. Never raises: a broken stage becomes a 'failed' result, the scan goes on."""
+    try:
+        fn = load_callable(path)
+    except Exception as e:      # the stage's own import is broken (e.g. a mistyped module name)
+        log.exception("stage '%s' could not be loaded", name)
+        return StageResult(name, "failed", f"could not load {path}: {type(e).__name__}: {e}")
+    if fn is None:
+        log.info("stage '%s' not implemented yet, skipping", name)
+        return StageResult(name, "skipped", f"{path} not found")
+    try:
+        log.info("stage '%s' started", name)
+        outcome = fn(ctx)
+        # A stage that deliberately did nothing (e.g. the mode forbids it)
+        # returns {"skipped": "<reason>"} so `marsadix scan` reports it as
+        # skipped instead of a misleading "ok".
+        if isinstance(outcome, dict) and outcome.get("skipped"):
+            return StageResult(name, "skipped", str(outcome["skipped"]))
+        return StageResult(name, "ok")
+    except Exception as e:  # one broken stage must not kill the scan
+        log.exception("stage '%s' failed", name)
+        return StageResult(name, "failed", f"{type(e).__name__}: {e}")
+
+
+def _run_parallel(ctx, step, db_path: str) -> list:
+    """
+    Run independent stages at the same time, one thread each, each with its OWN
+    database connection (a sqlite3 connection must not be shared between threads).
+    Results come back in STAGES order whichever stage finishes first.
+    """
+    def work(name, path):
+        conn = db.connect(db_path)
+        try:
+            return _run_stage(replace(ctx, conn=conn), name, path)
+        finally:
+            conn.close()
+
+    ctx.conn.commit()                       # make everything recon wrote visible to the other connections
+    with ThreadPoolExecutor(max_workers=len(step), thread_name_prefix="stage") as pool:
+        futures = [pool.submit(work, n, p) for n, p in step]
+        return [f.result() for f in futures]
 
 
 def _close_scan(conn, scan, status: ScanStatus) -> None:

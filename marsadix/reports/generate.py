@@ -28,11 +28,9 @@ _preliminary_posture_score() below is a transparent, documented placeholder
 context-aware Risk Scoring / Attack Surface Score (M15 / M17) -- see the
 docstring on that function for the exact extension point.
 
-Not yet implemented here (left for a later pass, see C20):
-    - SARIF export
-    - PDF export
-  CSV export of findings IS implemented, client-side, via the "Export CSV"
-  button (pure JS, no server round-trip, no new dependency).
+More formats (C20) live in reports/export.py: CSV, SARIF 2.1.0 and a text PDF
+(`marsadix report --format csv|sarif|pdf|all`). The HTML page also keeps its
+client-side "Export CSV" button.
 """
 
 from __future__ import annotations
@@ -51,6 +49,8 @@ from ..core.diff import compute_diff
 from ..core.textfile import safe_filename as _safe_filename_component
 from ..models import utcnow
 from ..owasp import ALL_CATEGORIES
+from ..skills import registry as skills_registry
+from . import export
 
 log = logging.getLogger(__name__)
 
@@ -93,7 +93,29 @@ def _preliminary_posture_score(findings: list[dict]) -> int:
     return max(0, 100 - weighted * 4)
 
 
-def _gather(conn, target: str, scan_id: Optional[int]) -> Optional[dict]:
+def _read_scope_entries(path: Optional[str], limit: int = 40) -> list:
+    """The authorized-scope lines (comments stripped), so the report states what was in scope."""
+    if not path:
+        return []
+    try:
+        lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    return [ln.strip() for ln in lines if ln.strip() and not ln.strip().startswith("#")][:limit]
+
+
+def _read_tool_runs(target: str, scan_id: int, out_dir: Optional[str]) -> list:
+    """Per-tool outcome written by the pipeline (core/toolstatus), if it is next to the report."""
+    for d in filter(None, (out_dir, "output")):
+        p = Path(d) / f"{_safe_filename_component(target)}_scan{scan_id}_tools.json"
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+    return []
+
+
+def _gather(conn, target: str, scan_id: Optional[int], out_dir: Optional[str] = None) -> Optional[dict]:
     if scan_id is None:
         # The report describes the latest COMPLETED scan: a failed/interrupted one is
         # partial data. Only if nothing ever completed do we fall back to the newest.
@@ -108,15 +130,27 @@ def _gather(conn, target: str, scan_id: Optional[int]) -> Optional[dict]:
         # an id from another target would build a report titled `target` out of someone else's data
         return None
 
-    findings = [dict(r) for r in db.get_findings(conn, scan_id)]
+    findings = export.prioritize(dict(r) for r in db.get_findings(conn, scan_id))
     assets = [dict(r) for r in db.get_assets(conn, scan_id)]
 
     prev = _previous_completed_scan(conn, target, scan_id)
     diff = compute_diff(conn, prev["id"], scan_id) if prev else None
 
+    scan_d = dict(scan_row)
+    active = {sk.name for sk in skills_registry.active_skills(
+        scan_d.get("mode") or "passive", allow_injection=True)}
+    skills = [{"name": sk.name, "title": sk.title, "engine": sk.engine,
+               "owasp_category": sk.owasp_category, "source_reference": sk.source_reference,
+               "state": "active" if sk.name in active else
+                        ("planned" if not skills_registry.is_implemented(sk.name) else "off")}
+              for sk in skills_registry.all_skills()]
+
     return {
         "target": target,
-        "scan": dict(scan_row),
+        "scan": scan_d,
+        "scope_entries": _read_scope_entries(scan_d.get("scope_file")),
+        "tool_runs": _read_tool_runs(target, scan_id, out_dir),
+        "detection_skills": skills,
         "assets": assets,
         "services": [dict(r) for r in db.get_services(conn, scan_id)],
         "technologies": [dict(r) for r in db.get_technologies(conn, scan_id)],
@@ -454,10 +488,74 @@ def _e(value) -> str:
     return html.escape("" if value is None else str(value))
 
 
+def _remediation_for(finding: dict) -> str:
+    """
+    Remediation text for one finding. The remediation database (M19) is owned by
+    the CVE-monitor/risk role; when `marsadix/remediation.py` provides
+    get_remediation(finding) -> str | None this shows it, until then a clear placeholder.
+    """
+    try:
+        from .. import remediation                      # type: ignore[attr-defined]
+        text = remediation.get_remediation(finding)
+    except Exception:                                   # module absent or broken: never break the report
+        text = None
+    return text or "Not available yet (remediation database pending)"
+
+
+def _exec_summary_section(data: dict) -> str:
+    top = export.prioritize(data["findings"])[:5]
+    items = "".join(
+        f"<li><span class=\"badge sev-{_e(f.get('severity'))}\">{_e(f.get('severity'))}</span> "
+        f"{_e(f.get('title'))} &mdash; {_e(f.get('host'))} "
+        f"({_e(_STATUS_LABEL.get(str(f.get('status')), f.get('status')))})</li>" for f in top)
+    paras = "".join(f"<p>{_e(line)}</p>" for line in export.summary_lines(data))
+    return f"""<section>
+    <h2>Executive summary</h2>
+    {paras}
+    {('<h3>Top priorities</h3><ol class="top">' + items + '</ol>') if items else '<p>No findings in this scan.</p>'}
+  </section>"""
+
+
+def _scope_methodology_section(data: dict) -> str:
+    scan = data["scan"]
+    scope = data.get("scope_entries") or []
+    scope_html = ("<pre class=\"scope\">" + _e("\n".join(scope)) + "</pre>") if scope else \
+        f"<p>Default scope: <code>{_e(data['target'])}</code> and its subdomains" + \
+        (f" (scope file: <code>{_e(scan.get('scope_file'))}</code>)" if scan.get("scope_file") else "") + ".</p>"
+    runs = data.get("tool_runs") or []
+    bad = [r for r in runs if r.get("status") in ("failed", "timeout", "truncated")]
+    if not runs:
+        tools_html = "<p>No per-tool status was recorded for this scan.</p>"
+    else:
+        tools_html = ("<p>" + (f"<strong>{len(bad)} tool run(s) were incomplete</strong>: results from them may be missing. "
+                               if bad else "All recorded tool runs completed. ") + "</p>"
+                      "<table><thead><tr><th>Tool / source</th><th>Status</th><th>Detail</th></tr></thead><tbody>" +
+                      "".join(f"<tr><td>{_e(r.get('tool'))}</td><td>{_e(r.get('status'))}</td><td>{_e(r.get('detail'))}</td></tr>"
+                              for r in runs) + "</tbody></table>")
+    skills = data.get("detection_skills") or []
+    active = [k for k in skills if k["state"] == "active"]
+    planned = [k for k in skills if k["state"] == "planned"]
+    skills_html = ("<table><thead><tr><th>Skill</th><th>Engine</th><th>OWASP</th><th>Methodology</th></tr></thead><tbody>" +
+                   "".join(f"<tr><td>{_e(k['name'])}</td><td>{_e(k['engine'])}</td><td>{_e(k['owasp_category'] or '-')}</td>"
+                           f"<td>{_e(k['source_reference'])}</td></tr>" for k in active) + "</tbody></table>") if active else \
+        "<p>No detection skills were active in this scan (the detection stage is not implemented yet).</p>"
+    if planned:
+        skills_html += f"<p class=\"muted\">Planned, not yet available: {_e(', '.join(k['name'] for k in planned))}.</p>"
+    return f"""<section>
+    <h2>Scope &amp; methodology</h2>
+    <h3>Scope</h3>{scope_html}
+    <h3>Scan parameters</h3>
+    <p>Mode <code>{_e(scan.get('mode', 'passive'))}</code> &middot; recursion depth {_e(scan.get('max_depth'))} &middot;
+       rate limit {_e(scan.get('rate_limit') or 'default')} &middot; {'baseline scan' if scan.get('is_baseline') else 'tracked scan'}.</p>
+    <h3>Detection skills</h3>{skills_html}
+    <h3>Tools and data sources</h3>{tools_html}
+  </section>"""
+
+
 def _findings_rows(findings: list[dict]) -> str:
     rows = []
-    order = {s: i for i, s in enumerate(_SEVERITY_ORDER)}
-    for f in sorted(findings, key=lambda f: order.get(f.get("severity"), 99)):
+    order = {s: i for i, s in enumerate(_SEVERITY_ORDER)}   # (rows arrive already prioritized; kept for callers that pass raw lists)
+    for f in export.prioritize(findings):
         status = f.get("status", "no_indicators")
         rows.append(f"""
         <tr class="sev-{_e(f.get('severity'))}">
@@ -469,6 +567,7 @@ def _findings_rows(findings: list[dict]) -> str:
           <td>{_e(f.get('confidence'))}</td>
           <td class="engagement-only">{_e(f.get('evidence') or '-')}</td>
           <td class="engagement-only">{_e(f.get('source_reference') or '-')}</td>
+          <td class="engagement-only">{_e(_remediation_for(f))}</td>
           <td class="engagement-only">{_e(f.get('url') or '-')}</td>
           <td class="engagement-only"><span class="badge exploited-false">Detected — Not Exploited</span></td>
         </tr>""")
@@ -589,6 +688,10 @@ th { color:var(--muted); font-weight:600; font-size:11px; text-transform:upperca
 .owasp-covered td:first-child { font-weight:600; }
 .owasp-uncovered { color:var(--muted); }
 .engagement-only { display:none; }
+.muted { color:var(--muted); }
+pre.scope { background:var(--surface); border:1px solid var(--border); padding:8px 12px; border-radius:6px; overflow:auto; }
+ol.top li { margin:4px 0; }
+@media print { .toolbar { display:none; } body { background:#fff; color:#000; } section { break-inside:avoid-page; } }
 body.engagement .engagement-only { display:table-cell; }
 .muted { color:var(--muted); }
 .limitations { background:var(--surface); border:1px solid var(--border);
@@ -696,6 +799,10 @@ def _render_html(data: dict) -> str:
     </div>
   </section>
 
+  {_exec_summary_section(data)}
+
+  {_scope_methodology_section(data)}
+
   <section>
     <h2>Changes since previous scan</h2>
     {_diff_section(data['diff'], data['previous_scan_id'], scan['id'])}
@@ -715,12 +822,13 @@ def _render_html(data: dict) -> str:
   </section>
 
   <section>
-    <h2>Findings</h2>
+    <h2>Prioritized findings</h2>
     <table id="findings-table">
       <thead><tr>
         <th>Host</th><th>Title</th><th>Severity</th><th>Status</th><th>OWASP</th><th>Confidence</th>
         <th class="engagement-only">Evidence</th>
         <th class="engagement-only">Source</th>
+        <th class="engagement-only">Remediation</th>
         <th class="engagement-only">URL</th>
         <th class="engagement-only">Exploitation</th>
       </tr></thead>
@@ -767,11 +875,21 @@ def _write_html(data: dict, out_dir: Path, target: str, scan_id: int) -> Path:
 # entry point
 # --------------------------------------------------------------------------
 
+FORMATS = ("html", "json", "csv", "sarif", "pdf", "both", "all")
+
+
 def generate_report(conn, target: str, fmt: str = "both", out_dir: str = "output",
                      scan_id: Optional[int] = None) -> int:
-    """Entry point for `marsadix report`. Returns a process exit code."""
+    """
+    Entry point for `marsadix report`. Returns a process exit code.
+
+    fmt: html | json | csv | sarif | pdf | both (= html + json, the default) | all
+    """
     target = (target or "").strip()
-    data = _gather(conn, target, scan_id)
+    if fmt not in FORMATS:
+        print(f"error: unknown format {fmt!r} (choose from: {', '.join(FORMATS)})", file=sys.stderr)
+        return 1
+    data = _gather(conn, target, scan_id, out_dir)
     if data is None:
         extra = f" (scan id {scan_id})" if scan_id else ""
         print(f"error: no completed scans found for {target!r}{extra}. "
@@ -781,13 +899,20 @@ def generate_report(conn, target: str, fmt: str = "both", out_dir: str = "output
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     real_scan_id = data["scan"]["id"]
+    wanted = {"both": {"json", "html"}, "all": {"json", "html", "csv", "sarif", "pdf"}}.get(fmt, {fmt})
 
     written = []
-    if fmt in ("json", "both"):
+    if "json" in wanted:
         written.append(_write_json(data, out, target, real_scan_id))
-    if fmt in ("html", "both"):
+    if "html" in wanted:
         written.append(_write_html(data, out, target, real_scan_id))
+    if "csv" in wanted:
+        written.append(export.write_csv(data, out, target, real_scan_id))
+    if "sarif" in wanted:
+        written.append(export.write_sarif(data, out, target, real_scan_id))
+    if "pdf" in wanted:
+        written.append(export.write_pdf(data, out, target, real_scan_id))
 
-    for p in written:
-        print(f"wrote {p}")
+    for path in written:
+        print(f"wrote {path}")
     return 0

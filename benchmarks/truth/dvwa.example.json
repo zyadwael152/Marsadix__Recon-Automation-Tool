@@ -1,0 +1,8 @@
+{
+  "target_name": "DVWA - example only, verify paths against your own install",
+  "entries": [
+    {"id": "dvwa-xss-reflected", "owasp_category": "A03:2021-Injection", "url_contains": "/vulnerabilities/xss_r"},
+    {"id": "dvwa-xss-stored",    "owasp_category": "A03:2021-Injection", "url_contains": "/vulnerabilities/xss_s"},
+    {"id": "dvwa-sqli",          "owasp_category": "A03:2021-Injection", "url_contains": "/vulnerabilities/sqli/"}
+  ]
+}

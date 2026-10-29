@@ -5,6 +5,7 @@ max_depth = 2          # recursion depth limit
 rate_limit = 50        # requests per second passed to the tools
 tool_timeout = 600     # hard upper bound (seconds) for ANY single external tool
 max_concurrent_tools = 8  # external tool processes allowed to run at once
+parallel_stages = true   # run web + ports at the same time (set false to debug one at a time)
 scan_mode = "passive"  # passive | standard | full                 (C15)
 allow_injection = false  # true only when injection detection (A5) is wanted
 
