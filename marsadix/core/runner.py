@@ -140,15 +140,26 @@ def tool_status() -> list:
     return [(n, find_tool(n), purpose) for n, purpose in KNOWN_TOOLS.items()]
 
 
+def httpx_check() -> tuple:
+    """
+    (is_projectdiscovery, first line `httpx -version` printed).
+    is_projectdiscovery is None when httpx is not found or cannot be started. The first line is
+    returned so `marsadix doctor` can show WHAT the command on PATH answered: a broken launcher
+    (for example "did not find executable at '/usr/bin\\python.exe'") looks nothing like a version banner.
+    """
+    if find_tool("httpx") is None:
+        return None, ""
+    try:
+        res = run_tool(["httpx", "-version"], timeout=15)
+    except (ToolNotFound, OSError):
+        return None, ""
+    out = (res.stdout + res.stderr).strip()
+    return "projectdiscovery" in out.lower(), (out.splitlines()[0] if out else "")
+
+
 def httpx_is_projectdiscovery() -> Optional[bool]:
     """
     The Python package 'httpx' ALSO installs a command called 'httpx' and can
     shadow ProjectDiscovery's. Heuristic check; None if httpx is not found.
     """
-    if find_tool("httpx") is None:
-        return None
-    try:
-        res = run_tool(["httpx", "-version"], timeout=15)
-    except (ToolNotFound, OSError):
-        return None
-    return "projectdiscovery" in (res.stdout + res.stderr).lower()
+    return httpx_check()[0]

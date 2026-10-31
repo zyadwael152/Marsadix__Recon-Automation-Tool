@@ -118,7 +118,7 @@ $goTools = @(
   @{ Name = "amass";       Module = "github.com/owasp-amass/amass/v4/...@master" },
   @{ Name = "chaos";       Module = "github.com/projectdiscovery/chaos-client/cmd/chaos@latest" },
   @{ Name = "alterx";      Module = "github.com/projectdiscovery/alterx/cmd/alterx@latest" },
-  @{ Name = "puredns";     Module = "github.com/d3mondev/puredns/v2/cmd/puredns@latest" }
+  @{ Name = "puredns";     Module = "github.com/d3mondev/puredns/v2@latest" }
 )
 
 $goAvailable = [bool](Get-Command go -ErrorAction SilentlyContinue)

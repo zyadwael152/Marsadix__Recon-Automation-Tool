@@ -43,7 +43,6 @@ ENV_MAP = {
     "NVD_API_KEY": "nvd_api_key",
     # Recon data sources (R2)
     "SHODAN_API_KEY": "shodan_api_key",
-    "SECURITYTRAILS_API_KEY": "securitytrails_api_key",
     "CENSYS_API_KEY": "censys_api_key",
     "VIRUSTOTAL_API_KEY": "virustotal_api_key",
     "OTX_API_KEY": "otx_api_key",
@@ -85,7 +84,6 @@ class Config:
     # key is skipped, never fatal (see marsadix.recon.sources for the pattern)
     shodan_api_key: str = field(default="", repr=False)
     censys_api_key: str = field(default="", repr=False)      # "API_ID:API_SECRET" (Basic auth) or a bearer token
-    securitytrails_api_key: str = field(default="", repr=False)
     virustotal_api_key: str = field(default="", repr=False)
     otx_api_key: str = field(default="", repr=False)
     chaos_api_key: str = field(default="", repr=False)
@@ -158,9 +156,39 @@ def load_dotenv(path: str = ".env") -> dict:
     return values
 
 
+def warn_if_secrets_in_example(path: str = ".env.example") -> list:
+    """
+    `.env.example` is a TEMPLATE that is committed to git. If it holds real values for secret-looking
+    settings, those keys are already in the repository history. Warn (names only, never values) and
+    return the names so a test can check it.
+    """
+    p = Path(path)
+    if not p.is_file():
+        return []
+    try:
+        text = read_text(p)
+    except (ValueError, OSError):
+        return []
+    leaked = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip().strip('"').strip("'")
+        if value and key in ENV_MAP and any(w in key for w in ("KEY", "TOKEN", "WEBHOOK", "SECRET", "PASSWORD")):
+            leaked.append(key)
+    if leaked:
+        log.warning("%s contains real-looking values for: %s. That file is committed to git: move the keys to .env "
+                    "(git-ignored), empty them here, and rotate any key that was ever committed.",
+                    path, ", ".join(leaked))
+    return leaked
+
+
 def load_config(path: Optional[str] = None) -> Config:
     """Load config. `path` None -> use ./config.toml if it exists."""
     dotenv = load_dotenv()
+    warn_if_secrets_in_example()
     cfg = Config()
     known = {f.name: f for f in fields(Config)}
 

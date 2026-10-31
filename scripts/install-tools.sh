@@ -211,7 +211,7 @@ install_go_tool nuclei      github.com/projectdiscovery/nuclei/v3/cmd/nuclei
 install_go_tool gau         github.com/lc/gau/v2/cmd/gau
 install_go_tool ffuf        github.com/ffuf/ffuf/v2
 install_go_tool alterx      github.com/projectdiscovery/alterx/cmd/alterx
-install_go_tool puredns     github.com/d3mondev/puredns/v2/cmd/puredns
+install_go_tool puredns     github.com/d3mondev/puredns/v2
 install_massdns
 # `apt install amass` does not exist on Debian/Ubuntu (it is a Kali package),
 # which made the Docker build fail its tool check. Install it like the other

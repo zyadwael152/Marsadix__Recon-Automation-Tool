@@ -114,6 +114,7 @@ def test_cli_tool_preserves_partial_stdout_on_timeout(monkeypatch):
         return fake
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr("marsadix.core.aproc.shutil.which", lambda name: name)   # the fake tool is not on PATH
     name, results = asyncio.run(discovery.run_cli_tool("fake-tool", ["fake-tool"], timeout=0.001))
 
     assert name == "fake-tool"

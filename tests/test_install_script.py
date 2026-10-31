@@ -24,3 +24,13 @@ def test_windows_installer_never_runs_go_install_for_massdns():
 def test_linux_installer_does_not_depend_on_getent_alone():
     text = SCRIPT.read_text(encoding="utf-8")
     assert "getent" in text and "dscl" in text and 'REAL_HOME="$HOME"' in text   # macOS fallback
+
+
+def test_puredns_is_installed_from_its_real_module_path():
+    # puredns keeps main.go at the module root (go install github.com/d3mondev/puredns/v2@latest);
+    # a /cmd/puredns suffix does not exist and made the installer report "failed: puredns".
+    sh = SCRIPT.read_text(encoding="utf-8")
+    ps1 = (SCRIPT.parent / "install-tools.ps1").read_text(encoding="utf-8")
+    assert "d3mondev/puredns/v2/cmd/puredns" not in sh + ps1
+    assert "install_go_tool puredns     github.com/d3mondev/puredns/v2\n" in sh
+    assert "github.com/d3mondev/puredns/v2@latest" in ps1

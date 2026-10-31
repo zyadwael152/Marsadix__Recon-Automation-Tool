@@ -275,6 +275,25 @@ def write_pdf(data: dict, out_dir: Path, target: str, scan_id: int, max_findings
             pdf.text(f"{s['name']} ({s['engine']}) - {s['source_reference']}", 9, indent=10, gap=1)
         pdf.space(8)
 
+    services = sorted(data.get("services", []), key=lambda r: (str(r.get("host")), int(r.get("port") or 0)))
+    pdf.text(f"Open ports and services ({len(services)})", 13, bold=True)
+    if services:
+        for r in services[:150]:
+            what = " ".join(str(x) for x in (r.get("name"), r.get("product"), r.get("version")) if x) or "-"
+            pdf.text(f"{r.get('host')}  {r.get('port')}/{r.get('protocol') or 'tcp'}  {what}", 9, indent=10, gap=1)
+        if len(services) > 150:
+            pdf.text(f"... {len(services) - 150} more in the JSON report.", 9, indent=10)
+    else:
+        pdf.text("None recorded (passive mode, CDN-protected hosts and out-of-scope hosts are not port-scanned).", 9, indent=10)
+    pdf.space(8)
+    techs = sorted(data.get("technologies", []), key=lambda r: (str(r.get("host")), str(r.get("name")).lower()))
+    pdf.text(f"Technologies ({len(techs)})", 13, bold=True)
+    for t in techs[:150]:
+        pdf.text(f"{t.get('host')}  {t.get('name')} {t.get('version') or ''}".rstrip(), 9, indent=10, gap=1)
+    if len(techs) > 150:
+        pdf.text(f"... {len(techs) - 150} more in the JSON report.", 9, indent=10)
+    pdf.space(8)
+
     ordered = prioritize(data.get("findings", []))
     pdf.text(f"Prioritized findings ({len(ordered)})", 13, bold=True)
     for i, f in enumerate(ordered[:max_findings], 1):

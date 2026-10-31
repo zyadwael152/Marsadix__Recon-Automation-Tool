@@ -45,3 +45,17 @@ def _no_provider_spacing(monkeypatch):
     monkeypatch.setattr(api_sources, "PROVIDER_GAP", {})
     from marsadix.recon import discovery
     monkeypatch.setattr(discovery, "CRTSH_RETRY_WAITS", (0, 0))
+
+
+@pytest.fixture(autouse=True)
+def _no_real_external_tools(monkeypatch):
+    """
+    The suite must never run a REAL external tool (subfinder, httpx, gau, nmap ...).
+
+    On a machine where the tools are installed, tests that call `scan` would otherwise start
+    them against example.com: slow, networked, and different from CI. PATH is therefore an
+    empty directory for every test. A test that needs a program sets its own PATH (see the
+    fake-tool tests); sys.executable is absolute and unaffected.
+    """
+    import tempfile
+    monkeypatch.setenv("PATH", tempfile.mkdtemp(prefix="marsadix_nopath_"))

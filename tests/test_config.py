@@ -104,15 +104,13 @@ def test_config_toml_saved_as_utf16_by_powershell_is_readable():
     assert load_config(None).rate_limit == 7
 
 
-def test_securitytrails_is_a_real_source_with_a_fetcher(monkeypatch):
-    # It had been removed from the config because no fetcher existed (a key that did nothing).
-    # R2 lists it, so it came back together with recon/api_sources.fetch_securitytrails.
-    from marsadix.recon import api_sources
-    monkeypatch.setenv("SECURITYTRAILS_API_KEY", "st-key")
+def test_securitytrails_was_fully_removed_from_the_config_surface(monkeypatch):
+    monkeypatch.setenv("SECURITYTRAILS_API_KEY", "st-should-be-ignored")
     cfg = load_config(None)
-    assert ENV_MAP["SECURITYTRAILS_API_KEY"] == "securitytrails_api_key"
-    assert cfg.securitytrails_api_key == "st-key" and "st-key" not in repr(cfg)
-    assert callable(api_sources.fetch_securitytrails)
+
+    assert "SECURITYTRAILS_API_KEY" not in ENV_MAP
+    assert not hasattr(cfg, "securitytrails_api_key")
+    # The active recon keys are still present and load normally.
     assert ENV_MAP["SHODAN_API_KEY"] == "shodan_api_key"
     assert ENV_MAP["CENSYS_API_KEY"] == "censys_api_key"
     assert ENV_MAP["VIRUSTOTAL_API_KEY"] == "virustotal_api_key"

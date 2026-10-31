@@ -33,6 +33,7 @@ import argparse
 import asyncio
 import logging
 import os
+import platform
 import sys
 from typing import Optional, Sequence
 
@@ -42,7 +43,7 @@ from .core.config import SCAN_MODES, Config, ConfigError, load_config
 from .core.loader import load_callable
 from .core.log import setup_logging
 from .core.pipeline import run_scan
-from .core.runner import httpx_is_projectdiscovery, tool_status
+from .core.runner import httpx_check, tool_status
 from .core.scope import Scope, ScopeError, normalize_host, valid_hostname
 
 log = logging.getLogger("marsadix.cli")
@@ -259,16 +260,24 @@ def cmd_doctor(a, cfg: Config) -> int:
     rows = tool_status()
     w = max(len(n) for n, _, _ in rows)
     missing = 0
+    print(f"Python: {sys.executable}  ({platform.system()})")
     print("External tools:")
     for name, path, purpose in rows:
         mark = "OK     " if path else "MISSING"
         missing += 0 if path else 1
         print(f"  [{mark}] {name:<{w}}  {purpose}" + (f"  ({path})" if path else ""))
-    flavor = httpx_is_projectdiscovery()
+    flavor, first_line = httpx_check()
     if flavor is False:
         print("\n  WARNING: the 'httpx' on your PATH does not look like ProjectDiscovery's.\n"
               "  The Python package 'httpx' installs a command with the same name.\n"
               "  Use a full path to the right one, or avoid installing Python httpx globally.")
+        if first_line:
+            print(f"  `httpx -version` answered: {first_line[:160]}")
+    found = {n for n, p, _ in rows if p}
+    if os.name == "nt" and ("massdns" not in found or "puredns" not in found):
+        print("\n  NOTE (Windows): massdns is a C program with no native Windows build, and puredns needs it.\n"
+              "  Tools installed inside WSL are NOT visible to this PowerShell. To use DNS bruteforce, run Marsadix\n"
+              "  inside WSL (or Docker). Without it Marsadix falls back to a plain resolver wordlist check.")
     print(f"\n{len(rows) - missing}/{len(rows)} tools found."
           f" API key: {'set' if cfg.nvd_api_key else 'NOT set (NVD_API_KEY in .env)'}."
           f" Discord webhook: {'set' if cfg.discord_webhook else 'NOT set (DISCORD_WEBHOOK_URL in .env)'}.")

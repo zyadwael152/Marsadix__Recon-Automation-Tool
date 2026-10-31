@@ -5,7 +5,7 @@ import re
 import urllib.error
 import urllib.request
 from typing import Set, List, Dict, Tuple
-from .api_sources import fetch_securitytrails, fetch_virustotal, fetch_alienvault, fetch_shodan, fetch_censys
+from .api_sources import fetch_virustotal, fetch_alienvault, fetch_shodan, fetch_censys
 from ..core import limits, toolstatus
 from ..core.aproc import run_exec
 from .merger import merge_and_track
@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 # Validate tool output as hostnames rather than dropping names based on their
 # appearance. Long or numeric labels can be real assets (VPNs, CDNs, build IDs).
 CRTSH_MAX_BYTES = 50 * 1024 * 1024
+_PATH_HINT = " Installed it in WSL or another shell? Install it where Marsadix runs, or add its folder to PATH; `marsadix doctor` shows what is found."
 
 
 def _names_under(domain: str):
@@ -41,7 +42,7 @@ async def run_cli_tool(tool_name: str, command: List[str], timeout: int = 120,
         async with limits.slot():
             res = await run_exec(command, timeout=timeout, env_extra=env_overrides)
     except FileNotFoundError:
-        logger.info(f"[-] {tool_name} is not installed - skipped.")
+        logger.info(f"[-] {tool_name} was not found on PATH - skipped.{_PATH_HINT}")
         toolstatus.record(tool_name, "missing")
         return tool_name, subdomains
     except Exception as e:
@@ -170,7 +171,6 @@ async def _async_discover_single(domain: str, api_keys: dict) -> Dict[str, List[
     otx_key = api_keys.get("alienvault")
     shodan_key = api_keys.get("shodan")
     censys_key = api_keys.get("censys")
-    st_key = api_keys.get("securitytrails")
     
     tasks = [
         run_cli_tool("subfinder", ["subfinder", "-d", domain, "-silent"], domain=domain),
@@ -184,7 +184,6 @@ async def _async_discover_single(domain: str, api_keys: dict) -> Dict[str, List[
         fetch_virustotal(domain, vt_key),
         fetch_shodan(domain, shodan_key),
         fetch_censys(domain, censys_key),
-        fetch_securitytrails(domain, st_key),
     ]
     results = await asyncio.gather(*tasks)
     tool_outputs = {tool_name: subs for tool_name, subs in results}

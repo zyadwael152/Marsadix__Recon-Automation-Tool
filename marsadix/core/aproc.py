@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import signal
 from contextlib import suppress
 from dataclasses import dataclass
@@ -49,6 +50,12 @@ async def run_exec(cmd: List[str], *, input_data: Optional[bytes] = None, timeou
                    env_extra: Optional[Mapping[str, Optional[str]]] = None,
                    max_bytes: int = MAX_OUTPUT_BYTES) -> ExecResult:
     """Raises FileNotFoundError / OSError if the tool cannot be started."""
+    # Resolve the program ourselves, with the same search `marsadix doctor` uses (PATH + PATHEXT on
+    # Windows). The error then says what really happened, and the path that runs is the path doctor shows.
+    exe = shutil.which(cmd[0])
+    if exe is None:
+        raise FileNotFoundError(f"{cmd[0]}: not found on PATH")
+    cmd = [exe, *cmd[1:]]
     extra = {"start_new_session": True} if os.name == "posix" else {}
     process = await asyncio.create_subprocess_exec(
         *cmd,

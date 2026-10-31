@@ -19,6 +19,7 @@ from ..core import limits, toolstatus
 from ..core.aproc import run_exec
 
 logger = logging.getLogger(__name__)
+_HINT = " Installed it in WSL or another shell? Install it where Marsadix runs, or add its folder to PATH; `marsadix doctor` shows what is found."
 
 
 async def run_async(cmd: List[str], stdin_lines: Optional[List[str]] = None,
@@ -31,7 +32,7 @@ async def run_async(cmd: List[str], stdin_lines: Optional[List[str]] = None,
         async with limits.slot():
             res = await run_exec(cmd, input_data=data, timeout=timeout, env_extra=env_extra)
     except FileNotFoundError:
-        logger.info(f"[-] {name} is not installed - skipped.")
+        logger.info(f"[-] {name} was not found on PATH - skipped.{_HINT}")
         toolstatus.record(name, "missing")
         return None
     except OSError as e:

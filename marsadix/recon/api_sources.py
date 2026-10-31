@@ -30,7 +30,7 @@ SHODAN_PAGE_SIZE = 100
 # Minimum seconds between two requests to the same provider. Recursive discovery asks every
 # provider once per sub-target at the same time; free tiers (VirusTotal 4/min, Shodan 1/s,
 # OTX anonymous) answer that burst with HTTP 429. Empty dict = no spacing (tests).
-PROVIDER_GAP = {"alienvault": 2.0, "virustotal": 1.0, "shodan": 1.1, "censys": 1.0, "securitytrails": 1.0}
+PROVIDER_GAP = {"alienvault": 2.0, "virustotal": 1.0, "shodan": 1.1, "censys": 1.0}
 _gates: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
 
 
@@ -298,30 +298,3 @@ async def fetch_censys(domain: str, api_key: str = None) -> Tuple[str, Set[str]]
         toolstatus.record("censys", "failed", type(e).__name__)
     return "censys", subdomains
 
-
-async def fetch_securitytrails(domain: str, api_key: str = None) -> Tuple[str, Set[str]]:
-    """SecurityTrails subdomain list (R2). The API returns bare labels ("www"), so the domain is appended."""
-    subdomains: Set[str] = set()
-    if not api_key:
-        logger.info("[-] Skipped SecurityTrails (No API Key provided).")
-        return "securitytrails", subdomains
-    domain = _root_domain(domain)
-    url = (f"https://api.securitytrails.com/v1/domain/{urllib.parse.quote(domain, safe='.-')}/subdomains"
-           "?children_only=false&include_inactive=true")
-    logger.info("[*] Querying SecurityTrails...")
-    try:
-        await _throttle("securitytrails")
-        data = await _request_json_async(url, {"APIKEY": api_key, "Accept": "application/json"})
-        labels = data.get("subdomains")
-        for label in labels if isinstance(labels, list) else []:
-            if isinstance(label, str) and label.strip():
-                name = f"{label.strip().lower().strip('.')}.{domain}"
-                if _under_domain(name, domain):
-                    subdomains.add(name)
-        logger.info("[+] SecurityTrails discovered %d subdomains.", len(subdomains))
-    except urllib.error.HTTPError as e:
-        _on_http_error("securitytrails", "SecurityTrails", e)
-    except Exception as e:
-        logger.warning("[-] SecurityTrails request failed (%s).", type(e).__name__)
-        toolstatus.record("securitytrails", "failed", type(e).__name__)
-    return "securitytrails", subdomains

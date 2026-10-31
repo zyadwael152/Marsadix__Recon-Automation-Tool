@@ -27,7 +27,6 @@ def _extract_api_keys(ctx) -> dict:
             "alienvault": getattr(cfg, "otx_api_key", "") or None,
             "shodan": getattr(cfg, "shodan_api_key", "") or None,
             "censys": getattr(cfg, "censys_api_key", "") or None,
-            "securitytrails": getattr(cfg, "securitytrails_api_key", "") or None,
         }
     if isinstance(ctx, dict) and "config" in ctx:
         c = ctx["config"]
@@ -38,7 +37,6 @@ def _extract_api_keys(ctx) -> dict:
             "alienvault": get("otx_api_key"),
             "shodan": get("shodan_api_key"),
             "censys": get("censys_api_key"),
-            "securitytrails": get("securitytrails_api_key"),
         }
     return {}
 

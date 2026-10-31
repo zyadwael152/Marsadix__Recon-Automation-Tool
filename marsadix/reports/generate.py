@@ -710,6 +710,117 @@ body.engagement .engagement-only { display:table-cell; }
 .legend-item i { width:9px; height:9px; border-radius:50%; display:inline-block; }
 """
 
+def _why_no_ports(data: dict) -> str:
+    """An empty table is not an answer. Say WHY there is nothing, from the scan's own data."""
+    mode = (data.get("scan") or {}).get("mode") or "passive"
+    assets = data.get("assets") or []
+    cdn = [a for a in assets if a.get("is_cdn")]
+    reasons = []
+    if mode == "passive":
+        reasons.append("the scan ran in passive mode, which never sends traffic to the target (use --mode standard or full)")
+    if cdn:
+        reasons.append(f"{len(cdn)} of {len(assets)} host(s) are behind a CDN/WAF, and those are deliberately not port-scanned "
+                       "(the open ports belong to the CDN, not to the target)")
+    out_scope = [a for a in assets if not a.get("in_scope")]
+    if out_scope:
+        reasons.append(f"{len(out_scope)} host(s) are out of scope and were not scanned")
+    reasons.append("no open port was found on the remaining hosts, or naabu / nmap were not available "
+                   "(see the tool status table under Scope &amp; methodology)")
+    return "<ul>" + "".join(f"<li>{r}</li>" for r in reasons) + "</ul>"
+
+
+def _services_section(data: dict) -> str:
+    services = sorted(data.get("services") or [], key=lambda r: (str(r.get("host")), int(r.get("port") or 0)))
+    if not services:
+        return f"""
+  <section>
+    <h2>Open ports &amp; services</h2>
+    <p>No open ports were recorded for this scan. Possible reasons:</p>{_why_no_ports(data)}
+  </section>
+"""
+    rows = []
+    for r in services:
+        product = " ".join(x for x in (r.get("product"), r.get("version")) if x) or "-"
+        rows.append(f"""
+        <tr>
+          <td>{_e(r.get('host'))}</td>
+          <td>{_e(r.get('ip') or '-')}</td>
+          <td>{_e(r.get('port'))}/{_e(r.get('protocol') or 'tcp')}</td>
+          <td>{_e(r.get('name') or '-')}</td>
+          <td>{_e(r.get('product') or '-')}</td>
+          <td>{_e(r.get('version') or '-')}</td>
+          <td class="engagement-only">{_e(r.get('cpe') or '-')}</td>
+          <td class="engagement-only">{_e(str(r.get('banner') or '-')[:120])}</td>
+        </tr>""")
+    hosts = len({r.get("host") for r in services})
+    return f"""
+  <section>
+    <h2>Open ports &amp; services</h2>
+    <p class="muted">{len(services)} open port(s) on {hosts} host(s). Version is what nmap reported; it can be empty when the service did not reveal it.</p>
+    <table>
+      <thead><tr><th>Host</th><th>IP</th><th>Port</th><th>Service</th><th>Product</th><th>Version</th>
+        <th class="engagement-only">CPE</th><th class="engagement-only">Banner</th></tr></thead>
+      <tbody>{"".join(rows)}</tbody>
+    </table>
+  </section>
+"""
+
+
+def _technologies_section(data: dict) -> str:
+    techs = sorted(data.get("technologies") or [], key=lambda r: (str(r.get("host")), str(r.get("name")).lower()))
+    if not techs:
+        return """
+  <section>
+    <h2>Technologies</h2>
+    <p>No technologies were detected. They come from the web stage (httpx), so this is empty in passive mode
+       or when no web server answered.</p>
+  </section>
+"""
+    rows = "".join(f"""
+        <tr>
+          <td>{_e(t.get('host'))}</td>
+          <td>{_e(t.get('name'))}</td>
+          <td>{_e(t.get('version') or '-')}</td>
+          <td>{_e(t.get('category') or '-')}</td>
+          <td>{_e(t.get('confidence') or '-')}</td>
+          <td class="engagement-only">{_e(t.get('source') or '-')}</td>
+          <td class="engagement-only">{_e(t.get('cpe') or '-')}</td>
+        </tr>""" for t in techs)
+    return f"""
+  <section>
+    <h2>Technologies</h2>
+    <p class="muted">{len(techs)} technology record(s). "Possible" means the name was seen without a version, so version-based CVE matching is less reliable.</p>
+    <table>
+      <thead><tr><th>Host</th><th>Technology</th><th>Version</th><th>Category</th><th>Confidence</th>
+        <th class="engagement-only">Source</th><th class="engagement-only">CPE</th></tr></thead>
+      <tbody>{rows}</tbody>
+    </table>
+  </section>
+"""
+
+
+def _web_section(data: dict) -> str:
+    items = data.get("web_items") or []
+    live = [w for w in items if w.get("kind") == "url"]
+    if not items:
+        return ""
+    n_end = sum(1 for w in items if w.get("kind") == "endpoint")
+    n_js = sum(1 for w in items if w.get("kind") == "js_file")
+    n_par = sum(1 for w in items if w.get("has_params"))
+    rows = "".join(f"<tr><td>{_e(w.get('host'))}</td><td>{_e(w.get('url'))}</td><td>{_e(w.get('status_code') or '-')}</td></tr>"
+                   for w in sorted(live, key=lambda w: str(w.get("url")))[:200])
+    table = (f"<table><thead><tr><th>Host</th><th>URL</th><th>Status</th></tr></thead><tbody>{rows}</tbody></table>"
+             if rows else "")
+    return f"""
+  <section>
+    <h2>Web surface</h2>
+    <p class="muted">{len(live)} live URL(s), {n_end} crawled endpoint(s) ({n_par} with parameters), {n_js} JavaScript file(s).
+       The full list is in the JSON report.</p>
+    {table}
+  </section>
+"""
+
+
 def _assets_section(data: dict) -> str:
     assets = data.get("assets") or []
     if not assets:
@@ -838,6 +949,9 @@ def _render_html(data: dict) -> str:
   </section>
 
   {_assets_section(data)}
+  {_services_section(data)}
+  {_technologies_section(data)}
+  {_web_section(data)}
 
   <section>
     <h2>Methodology &amp; limitations</h2>

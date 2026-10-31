@@ -288,3 +288,19 @@ def test_katana_is_limited_to_each_seed_host(monkeypatch):
     argv = seen["argv"]
     assert argv[argv.index("-fs") + 1] == "fqdn"
     assert "SHODAN_API_KEY" not in seen["env"]
+
+
+# ------------------------------------------------- keys must not live in .env.example
+def test_real_keys_in_env_example_trigger_a_warning_without_printing_them(tmp_path, monkeypatch, caplog):
+    from marsadix.core.config import warn_if_secrets_in_example
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env.example").write_text("SHODAN_API_KEY=sup3rs3cretvalue\nVIRUSTOTAL_API_KEY=\n# note\nMARSADIX_RATE_LIMIT=20\n")
+    with caplog.at_level("WARNING"):
+        assert warn_if_secrets_in_example() == ["SHODAN_API_KEY"]
+    assert "SHODAN_API_KEY" in caplog.text and "sup3rs3cretvalue" not in caplog.text
+
+
+def test_the_shipped_env_example_holds_no_values_for_secrets():
+    from pathlib import Path
+    from marsadix.core.config import warn_if_secrets_in_example
+    assert warn_if_secrets_in_example(str(Path(__file__).resolve().parents[1] / ".env.example")) == []

