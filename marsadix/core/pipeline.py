@@ -196,17 +196,19 @@ def run_scan(target: str, config: Config, scope: Optional[Scope] = None,
                          max_concurrency=run_config.max_concurrent_tools)
         parallel_ok = getattr(run_config, "parallel_stages", True) and run_config.db_path != ":memory:"
         for step in _plan(STAGES):
+            window = len(toolstatus.runs())          # only what went wrong DURING this step is reported on it
             if len(step) > 1 and parallel_ok:
                 results.extend(_run_parallel(ctx, step, run_config.db_path))
             else:
                 for name, path in step:
                     results.append(_run_stage(ctx, name, path))
             # An "ok" stage can still have lost data (a tool timed out, crashed ...).
-            ctx.degraded_tools = toolstatus.degraded()
-            if ctx.degraded_tools:
+            ctx.degraded_tools = toolstatus.degraded()          # cumulative: the track stage needs all of it
+            new = [r for r in toolstatus.runs()[window:] if r.status in toolstatus.INCOMPLETE]
+            if new:
                 for r in results[-len(step):]:
                     if r.status == "ok" and not r.detail:
-                        r.detail = "incomplete: " + toolstatus.summary(ctx.degraded_tools)
+                        r.detail = "incomplete: " + toolstatus.summary(new)
 
         if toolstatus.runs():
             import os

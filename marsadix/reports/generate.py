@@ -689,6 +689,7 @@ th { color:var(--muted); font-weight:600; font-size:11px; text-transform:upperca
 .owasp-uncovered { color:var(--muted); }
 .engagement-only { display:none; }
 .muted { color:var(--muted); }
+section h3 { font-size:.82rem; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); font-weight:600; margin:18px 0 6px; }
 pre.scope { background:var(--surface); border:1px solid var(--border); padding:8px 12px; border-radius:6px; overflow:auto; }
 ol.top li { margin:4px 0; }
 @media print { .toolbar { display:none; } body { background:#fff; color:#000; } section { break-inside:avoid-page; } }

@@ -43,6 +43,7 @@ ENV_MAP = {
     "NVD_API_KEY": "nvd_api_key",
     # Recon data sources (R2)
     "SHODAN_API_KEY": "shodan_api_key",
+    "SECURITYTRAILS_API_KEY": "securitytrails_api_key",
     "CENSYS_API_KEY": "censys_api_key",
     "VIRUSTOTAL_API_KEY": "virustotal_api_key",
     "OTX_API_KEY": "otx_api_key",
@@ -83,7 +84,8 @@ class Config:
     # Recon data sources (R2) - any of these may be empty; a source with no
     # key is skipped, never fatal (see marsadix.recon.sources for the pattern)
     shodan_api_key: str = field(default="", repr=False)
-    censys_api_key: str = field(default="", repr=False)
+    censys_api_key: str = field(default="", repr=False)      # "API_ID:API_SECRET" (Basic auth) or a bearer token
+    securitytrails_api_key: str = field(default="", repr=False)
     virustotal_api_key: str = field(default="", repr=False)
     otx_api_key: str = field(default="", repr=False)
     chaos_api_key: str = field(default="", repr=False)

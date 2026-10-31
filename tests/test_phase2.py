@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from marsadix import benchmark, db
+from marsadix import benchmark, db, remediation
 from marsadix.core import attackpaths, pipeline
 from marsadix.core.config import Config, load_config
 from marsadix.models import (Asset, Confidence, DetectionStatus, Finding, FindingSource, Scan,
@@ -132,12 +132,15 @@ def test_every_skill_maps_to_a_real_owasp_category():
     assert len({s.name for s in registry.all_skills()}) == len(registry.all_skills())
 
 
-def test_a_skill_without_a_handler_is_never_reported_active():
+def test_a_skill_without_a_handler_is_never_reported_active(monkeypatch):
+    monkeypatch.setattr(registry, "_HANDLERS", {})
+    monkeypatch.setattr(registry, "_LOADED", True)           # do not lazy-load the real handlers
     assert registry.active_skills() == []
 
 
 def test_registered_handler_makes_a_skill_active_subject_to_mode_and_opt_in(monkeypatch):
     monkeypatch.setattr(registry, "_HANDLERS", {})
+    monkeypatch.setattr(registry, "_LOADED", True)
     registry.register_handler("ssti")(lambda ctx, t: None)
     registry.register_handler("jwt")(lambda ctx, t: None)
     assert {s.name for s in registry.active_skills("full", True)} == {"ssti", "jwt"}
@@ -323,3 +326,21 @@ def test_the_same_finding_in_two_scans_is_not_a_new_attack_path(conn):
     steps = attackpaths.time_machine(conn, "example.com")
     assert len(steps) == 2 and steps[1]["opened"] == [] and steps[1]["closed"] == []
     assert steps[0]["paths"] == ["subdomain:a.example.com > finding:Open admin panel"]
+
+
+# -------------------------------------------------------------------- remediation
+def test_remediation_by_skill_keyword_cve_and_owasp():
+    assert "parameterized" in remediation.get_remediation({"template_id": "sqli"})
+    assert "dangling DNS" in remediation.get_remediation({"title": "Subdomain Takeover (github)"})
+    assert "CVE-2021-1" in remediation.get_remediation({"cve_id": "CVE-2021-1", "technology": "nginx"})
+    assert "Separate code from data" in remediation.get_remediation({"owasp_category": "A03:2021-Injection"})
+    assert remediation.get_remediation({"title": "Environment details"}) is None      # whole words only
+    assert remediation.get_remediation({"title": "Exposed .env file"}).startswith("Remove the file")
+
+
+def test_remediation_text_shows_in_the_report(tmp_path):
+    from marsadix.reports.generate import _remediation_for
+    assert "parameterized" in _remediation_for({"template_id": "sqli"})
+    assert "pending" in _remediation_for({"title": "zzz"})
+
+

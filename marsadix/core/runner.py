@@ -62,6 +62,9 @@ KNOWN_TOOLS = {
     "assetfinder": "subdomain discovery via API sources",
     "chaos": "subdomain discovery via ProjectDiscovery Chaos dataset",
     "findomain": "fast subdomain discovery (Rust)",
+    "alterx": "subdomain permutations (R5; skipped when missing)",
+    "puredns": "DNS bruteforce with wildcard filtering (R6; needs massdns; falls back when missing)",
+    "massdns": "DNS engine used by puredns (C program: Linux/macOS/WSL/Docker, no native Windows build)",
 }
 
 

@@ -59,17 +59,17 @@ SKILLS: List[Skill] = [
           "ProjectDiscovery nuclei-templates (cves, technologies)"),
     # ---- custom skills on top of Nuclei (A5, A8) ------------------------------------------
     Skill("xss", "Reflected XSS (reflection evidence)", "custom", "xss_detected",
-          "OWASP Testing Guide; PortSwigger XSS methodology", needs_opt_in=True),
+          "OWASP Testing Guide; PortSwigger XSS methodology", needs_opt_in=True, min_mode="full"),
     Skill("sqli", "SQL injection (error / time-based evidence)", "custom", "sqli_detected",
-          "OWASP Testing Guide; PortSwigger SQL injection methodology", needs_opt_in=True),
+          "OWASP Testing Guide; PortSwigger SQL injection methodology", needs_opt_in=True, min_mode="full"),
     Skill("ssti", "Server-side template injection", "custom", "ssti_detected",
-          "PortSwigger SSTI methodology; PayloadsAllTheThings", needs_opt_in=True),
+          "PortSwigger SSTI methodology; PayloadsAllTheThings", needs_opt_in=True, min_mode="full"),
     Skill("open-redirect", "Open redirect", "custom", "open_redirect",
-          "PortSwigger; PayloadsAllTheThings", needs_opt_in=True),
+          "PortSwigger; PayloadsAllTheThings", needs_opt_in=True, min_mode="full"),
     Skill("crlf", "CRLF injection", "custom", "crlf_injection",
-          "PayloadsAllTheThings; HackTricks", needs_opt_in=True),
+          "PayloadsAllTheThings; HackTricks", needs_opt_in=True, min_mode="full"),
     Skill("host-header", "Host header injection", "custom", "host_header_injection",
-          "PortSwigger Host header attacks; HackTricks", needs_opt_in=True),
+          "PortSwigger Host header attacks; HackTricks", needs_opt_in=True, min_mode="full"),
     Skill("jwt", "JWT weaknesses", "custom", "jwt_weakness",
           "PortSwigger JWT attacks; HackTricks"),
     Skill("git-env-exposure", "Exposed .git / .env files", "custom", "git_env_exposure",
@@ -77,6 +77,23 @@ SKILLS: List[Skill] = [
 ]
 
 _HANDLERS: Dict[str, Callable] = {}
+
+
+_LOADED = False
+
+
+def _load_handlers() -> None:
+    """Import the modules that register handlers (asm/*). Done lazily, once, so that
+    `marsadix skills` and the report see the real implementation state."""
+    global _LOADED
+    if _LOADED:
+        return
+    _LOADED = True
+    for mod in ("marsadix.asm.nuclei", "marsadix.asm.skills"):
+        try:
+            __import__(mod)
+        except ImportError:
+            pass
 
 
 def register_handler(name: str):
@@ -91,6 +108,7 @@ def register_handler(name: str):
 
 
 def is_implemented(name: str) -> bool:
+    _load_handlers()
     return name in _HANDLERS
 
 

@@ -32,6 +32,7 @@ import sys
 from typing import Optional
 
 from .. import db
+from . import toolstatus
 from ..models import Alert, AlertChannel, AlertType, ScanDiff, default_priority
 
 log = logging.getLogger(__name__)
@@ -156,8 +157,7 @@ def run_stage(ctx) -> Optional[dict]:
     degraded = list(getattr(ctx, "degraded_tools", None) or [])
     if degraded:
         log.warning("track: scan #%s is incomplete (%s); new assets are still recorded, "
-                    "but disappearances are NOT reported", cur_id, ", ".join(
-                        f"{r.tool}:{r.status}" for r in degraded))
+                    "but disappearances are NOT reported", cur_id, toolstatus.summary(degraded))
 
     cur_hosts = [r["host"] for r in db.get_assets(conn, cur_id) if r["in_scope"]]
     new_hosts, gone_hosts, is_baseline = db.update_tracked_assets(

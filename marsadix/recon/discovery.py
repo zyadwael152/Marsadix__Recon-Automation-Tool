@@ -2,9 +2,10 @@ import asyncio
 import json
 import logging
 import re
+import urllib.error
 import urllib.request
 from typing import Set, List, Dict, Tuple
-from .api_sources import fetch_virustotal, fetch_alienvault, fetch_shodan, fetch_censys
+from .api_sources import fetch_securitytrails, fetch_virustotal, fetch_alienvault, fetch_shodan, fetch_censys
 from ..core import limits, toolstatus
 from ..core.aproc import run_exec
 from .merger import merge_and_track
@@ -14,10 +15,15 @@ logger = logging.getLogger(__name__)
 # Validate tool output as hostnames rather than dropping names based on their
 # appearance. Long or numeric labels can be real assets (VPNs, CDNs, build IDs).
 CRTSH_MAX_BYTES = 50 * 1024 * 1024
+
+
+def _names_under(domain: str):
+    """Regex for hostnames ending in `.domain` (one label or more in front)."""
+    return re.compile(r"[a-z0-9][a-z0-9._-]*\." + re.escape(domain.lower().rstrip(".")))
 _HOSTNAME_RE = re.compile(r"(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*\.?$", re.IGNORECASE)
 
 async def run_cli_tool(tool_name: str, command: List[str], timeout: int = 120,
-                       env_overrides: dict | None = None) -> Tuple[str, Set[str]]:
+                       env_overrides: dict | None = None, domain: str | None = None) -> Tuple[str, Set[str]]:
     """
     Run one subdomain tool and return (name, hostnames).
 
@@ -43,13 +49,28 @@ async def run_cli_tool(tool_name: str, command: List[str], timeout: int = 120,
         toolstatus.record(tool_name, "failed", type(e).__name__)
         return tool_name, subdomains
 
-    for line in res.stdout.decode(errors="replace").splitlines():
+    lines = [ln for ln in res.stdout.decode(errors="replace").splitlines() if ln.strip()]
+    for line in lines:
         sub = line.strip().lower().rstrip(".")
         # Ignore status/log lines and malformed output, but don't use a
         # heuristic that silently discards legitimate numeric/long names.
         if sub and _HOSTNAME_RE.fullmatch(sub):
             subdomains.add(sub)
+        elif domain:
+            # Some versions print richer lines ("a.example.com (FQDN) --> a_record --> 1.2.3.4"):
+            # take the names under the target domain out of the line.
+            for m in _names_under(domain).finditer(line.lower()):
+                cand = m.group(0).rstrip(".")
+                if _HOSTNAME_RE.fullmatch(cand):
+                    subdomains.add(cand)
 
+    if lines and not subdomains and not res.timed_out and res.returncode in (0, None):
+        # The tool ran and printed something, yet nothing looks like a hostname: its output format
+        # is probably not what we parse (a new version). Say so instead of "discovered 0".
+        logger.warning(f"[-] {tool_name} printed {len(lines)} line(s) but none contained a hostname "
+                       f"(first: {lines[0].strip()[:100]!r}). Check `{tool_name} -h` / your version.")
+        toolstatus.record(tool_name, "failed", "output format not recognised")
+        return tool_name, subdomains
     if res.timed_out:
         logger.warning(f"[-] {tool_name} timed out after {timeout:g}s; preserving partial output.")
         toolstatus.record(tool_name, "timeout", f"after {timeout:g}s, kept {len(subdomains)} host(s)")
@@ -75,29 +96,49 @@ async def run_chaos(domain: str, api_key: str = None) -> Tuple[str, Set[str]]:
     return await run_cli_tool("chaos", ["chaos", "-d", domain, "-silent"],
                               env_overrides={"PDCP_API_KEY": api_key})
 
+CRTSH_RETRY_WAITS = (3, 8)          # seconds before the 2nd and 3rd attempt (crt.sh often answers 502/503 under load)
+
+
 async def fetch_crtsh(domain: str) -> Tuple[str, Set[str]]:
     subdomains = set()
     url = f"https://crt.sh/?q=%25.{domain}&output=json"
     logger.info(f"[*] Querying crt.sh for {domain}...")
+    loop = asyncio.get_running_loop()
+    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+
+    def _fetch() -> Tuple[int, bytes]:
+        # The response must be closed explicitly; urlopen() alone leaks a socket until GC.
+        # Fixed https URL built above; no user-controlled scheme/host.
+        with urllib.request.urlopen(req, timeout=45) as response:  # nosec B310
+            # bounded: a huge answer must not be loaded into memory whole
+            return response.status, response.read(CRTSH_MAX_BYTES + 1)
+
+    status, body, last_error = None, b"", ""
+    for attempt in range(len(CRTSH_RETRY_WAITS) + 1):
+        try:
+            status, body = await loop.run_in_executor(None, _fetch)
+            last_error = ""
+            break
+        except urllib.error.HTTPError as e:
+            last_error = f"HTTP {e.code}"
+            if e.code < 500 and e.code != 429:
+                break                                   # a 4xx will not get better by asking again
+        except Exception as e:
+            last_error = type(e).__name__
+        if attempt < len(CRTSH_RETRY_WAITS):
+            wait = CRTSH_RETRY_WAITS[attempt]
+            logger.info(f"[*] crt.sh {last_error}; retrying in {wait}s ({attempt + 1}/{len(CRTSH_RETRY_WAITS)}).")
+            await asyncio.sleep(wait)
+
+    if status is None:
+        logger.warning(f"[-] Skipped crt.sh after {len(CRTSH_RETRY_WAITS) + 1} attempt(s): {last_error}")
+        toolstatus.record("crt.sh", "failed", last_error)
+        return "crt.sh", subdomains
+    if len(body) > CRTSH_MAX_BYTES:
+        logger.warning("[-] crt.sh answer exceeded %d MB; skipped (cannot parse a cut-off JSON).", CRTSH_MAX_BYTES // 2**20)
+        toolstatus.record("crt.sh", "truncated", "answer too large")
+        return "crt.sh", subdomains
     try:
-        loop = asyncio.get_running_loop()
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-
-        def _fetch() -> Tuple[int, bytes]:
-            # The response must be closed explicitly; urlopen() alone leaks a
-            # socket until GC, once per scan.
-            # Fixed https URL built above; no user-controlled scheme/host.
-            with urllib.request.urlopen(req, timeout=45) as response:  # nosec B310
-                # bounded: a huge answer must not be loaded into memory whole
-                return response.status, response.read(CRTSH_MAX_BYTES + 1)
-
-        # رفع مهلة الانتظار إلى 45 ثانية لتجنب مشاكل بطء سيرفر crt.sh
-        status, body = await loop.run_in_executor(None, _fetch)
-        if len(body) > CRTSH_MAX_BYTES:
-            logger.warning("[-] crt.sh answer exceeded %d MB; skipped (cannot parse a cut-off JSON).", CRTSH_MAX_BYTES // 2**20)
-            toolstatus.record("crt.sh", "truncated", "answer too large")
-            return "crt.sh", subdomains
-
         if status == 200:
             data = json.loads(body.decode(errors="replace"))
             if not isinstance(data, list):
@@ -107,22 +148,21 @@ async def fetch_crtsh(domain: str) -> Tuple[str, Set[str]]:
             for entry in data:
                 if not isinstance(entry, dict):
                     continue
-                name_value = str(entry.get('name_value', '')).lower()
-                for sub in name_value.split('\n'):
+                for sub in str(entry.get('name_value', '')).lower().split('\n'):
                     sub = sub.strip()
                     # استبعاد الـ Wildcards والدومينات العشوائية الضخمة
                     if sub and not sub.startswith('*') and _HOSTNAME_RE.fullmatch(sub):
                         subdomains.add(sub)
-        if status != 200:
-            toolstatus.record("crt.sh", "failed", f"HTTP {status}")
-        else:
             toolstatus.record("crt.sh", "ok")
-        logger.info(f"[+] crt.sh discovered {len(subdomains)} clean subdomains.")
-    except Exception as e:
-        logger.warning(f"[-] Skipped crt.sh due to error (Server slow or timeout): {e}")
-        toolstatus.record("crt.sh", "failed", type(e).__name__)
-        
+        else:
+            toolstatus.record("crt.sh", "failed", f"HTTP {status}")
+    except ValueError:
+        logger.warning("[-] crt.sh sent an answer that is not valid JSON; skipped.")
+        toolstatus.record("crt.sh", "failed", "invalid JSON")
+        return "crt.sh", subdomains
+    logger.info(f"[+] crt.sh discovered {len(subdomains)} clean subdomains.")
     return "crt.sh", subdomains
+
 
 async def _async_discover_single(domain: str, api_keys: dict) -> Dict[str, List[str]]:
     vt_key = api_keys.get("virustotal")
@@ -130,19 +170,21 @@ async def _async_discover_single(domain: str, api_keys: dict) -> Dict[str, List[
     otx_key = api_keys.get("alienvault")
     shodan_key = api_keys.get("shodan")
     censys_key = api_keys.get("censys")
+    st_key = api_keys.get("securitytrails")
     
     tasks = [
-        run_cli_tool("subfinder", ["subfinder", "-d", domain, "-silent"]),
-        run_cli_tool("assetfinder", ["assetfinder", "--subs-only", domain]),
+        run_cli_tool("subfinder", ["subfinder", "-d", domain, "-silent"], domain=domain),
+        run_cli_tool("assetfinder", ["assetfinder", "--subs-only", domain], domain=domain),
         # تم رفع الـ timeout هنا إلى 300 ثانية (5 دقائق) لمنع تايم آوت Amass
-        run_cli_tool("amass", ["amass", "enum", "-passive", "-d", domain, "-silent"], timeout=300),
-        run_cli_tool("findomain", ["findomain", "-t", domain, "-q"]),
+        run_cli_tool("amass", ["amass", "enum", "-passive", "-d", domain, "-silent"], timeout=300, domain=domain),
+        run_cli_tool("findomain", ["findomain", "-t", domain, "-q"], domain=domain),
         run_chaos(domain, chaos_key),
         fetch_crtsh(domain),
         fetch_alienvault(domain, otx_key),
         fetch_virustotal(domain, vt_key),
         fetch_shodan(domain, shodan_key),
         fetch_censys(domain, censys_key),
+        fetch_securitytrails(domain, st_key),
     ]
     results = await asyncio.gather(*tasks)
     tool_outputs = {tool_name: subs for tool_name, subs in results}

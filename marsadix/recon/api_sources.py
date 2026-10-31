@@ -7,8 +7,10 @@ restricted to the requested domain boundary.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
+import weakref
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -23,6 +25,47 @@ HTTP_TIMEOUT = 15  # seconds
 MAX_API_PAGES = 5  # bound API usage and memory on very large domains
 PAGE_SIZE = 50
 SHODAN_PAGE_SIZE = 100
+
+
+# Minimum seconds between two requests to the same provider. Recursive discovery asks every
+# provider once per sub-target at the same time; free tiers (VirusTotal 4/min, Shodan 1/s,
+# OTX anonymous) answer that burst with HTTP 429. Empty dict = no spacing (tests).
+PROVIDER_GAP = {"alienvault": 2.0, "virustotal": 1.0, "shodan": 1.1, "censys": 1.0, "securitytrails": 1.0}
+_gates: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+
+
+async def _throttle(provider: str) -> None:
+    gap = PROVIDER_GAP.get(provider, 0)
+    if not gap:
+        return
+    loop = asyncio.get_running_loop()
+    st = _gates.setdefault(loop, {"locks": {}, "last": {}})
+    lock = st["locks"].setdefault(provider, asyncio.Lock())
+    async with lock:
+        wait = st["last"].get(provider, -1e9) + gap - loop.time()
+        if wait > 0:
+            await asyncio.sleep(wait)
+        st["last"][provider] = loop.time()
+
+
+_HTTP_MEANING = {
+    401: "key rejected (wrong, expired or wrong format)",
+    402: "a paid plan is required",
+    403: "key accepted but this plan/permission does not allow the query",
+    404: "nothing found",
+    429: "rate limited",
+}
+
+
+def _http_note(code: int) -> str:
+    return _HTTP_MEANING.get(code, "provider error" if code >= 500 else "request refused")
+
+
+def _on_http_error(tool: str, label: str, e: urllib.error.HTTPError) -> None:
+    """Say WHAT failed (status + meaning, never the key) and record it correctly:
+    401-403 = setup problem (denied), everything else = this run is incomplete (failed)."""
+    logger.warning("[-] %s failed: HTTP %s - %s.", label, e.code, _http_note(e.code))
+    toolstatus.record(tool, "denied" if e.code in (401, 402, 403) else "failed", f"HTTP {e.code}")
 
 
 def _request_json(url: str, headers: dict | None = None) -> Dict[str, Any]:
@@ -96,6 +139,7 @@ async def fetch_virustotal(domain: str, api_key: str = None) -> Tuple[str, Set[s
     logger.info("[*] Querying VirusTotal...")
     try:
         for _ in range(MAX_API_PAGES):
+            await _throttle("virustotal")
             data = await _request_json_async(url, {"x-apikey": api_key})
             subdomains.update(_extract_names(data.get("data", []), domain))
             links = data.get("links")
@@ -108,6 +152,8 @@ async def fetch_virustotal(domain: str, api_key: str = None) -> Tuple[str, Set[s
                 break
             url = safe_next
         logger.info("[+] VirusTotal discovered %d subdomains (up to %d pages).", len(subdomains), MAX_API_PAGES)
+    except urllib.error.HTTPError as e:
+        _on_http_error("virustotal", "VirusTotal", e)
     except Exception as e:
         logger.warning("[-] VirusTotal request failed (%s).", type(e).__name__)
         toolstatus.record("virustotal", "failed", type(e).__name__)
@@ -115,23 +161,32 @@ async def fetch_virustotal(domain: str, api_key: str = None) -> Tuple[str, Set[s
 
 
 async def fetch_alienvault(domain: str, api_key: str = None) -> Tuple[str, Set[str]]:
-    """Query AlienVault OTX passive DNS; tolerate anonymous-tier rate limits."""
+    """Query AlienVault OTX passive DNS; one polite retry when the anonymous tier rate-limits."""
     subdomains: Set[str] = set()
     domain = _root_domain(domain)
     url = f"https://otx.alienvault.com/api/v1/indicators/domain/{urllib.parse.quote(domain, safe='.-')}/passive_dns"
     logger.info("[*] Querying AlienVault...")
+    headers = {"OTX-API-KEY": api_key} if api_key else {}
     try:
-        headers = {"OTX-API-KEY": api_key} if api_key else {}
-        await asyncio.sleep(1)  # reduce anonymous-tier rate-limit pressure
-        data = await _request_json_async(url, headers)
-        subdomains.update(_extract_names(data.get("passive_dns", []), domain, key="hostname"))
+        for attempt in (1, 2):
+            await _throttle("alienvault")
+            try:
+                data = await _request_json_async(url, headers)
+            except urllib.error.HTTPError as e:
+                if e.code == 429 and attempt == 1:
+                    try:
+                        wait = min(30, max(1, int(e.headers.get("Retry-After", 5))))
+                    except (TypeError, ValueError, AttributeError):
+                        wait = 5
+                    logger.info("[*] AlienVault rate-limited; retrying once in %ds.", wait)
+                    await asyncio.sleep(wait)
+                    continue
+                raise
+            subdomains.update(_extract_names(data.get("passive_dns", []), domain, key="hostname"))
+            break
         logger.info("[+] AlienVault discovered %d subdomains.", len(subdomains))
     except urllib.error.HTTPError as e:
-        if e.code == 429:
-            logger.warning("[-] AlienVault rate-limited (HTTP 429); skipped gracefully.")
-        else:
-            logger.warning("[-] AlienVault request failed with HTTP %s.", e.code)
-        toolstatus.record("alienvault", "failed", f"HTTP {e.code}")
+        _on_http_error("alienvault", "AlienVault", e)
     except Exception as e:
         logger.warning("[-] AlienVault request failed (%s).", type(e).__name__)
         toolstatus.record("alienvault", "failed", type(e).__name__)
@@ -155,8 +210,11 @@ async def fetch_shodan(domain: str, api_key: str = None) -> Tuple[str, Set[str]]
     logger.info("[*] Querying Shodan...")
     try:
         for page in range(1, MAX_API_PAGES + 1):
-            query = urllib.parse.urlencode({"SHODAN-API-KEY": api_key, "query": f"hostname:{domain}", "page": page})
+            # the parameter is `key` (it used to be sent as "SHODAN-API-KEY", which Shodan ignores, so
+            # EVERY request was rejected as unauthenticated)
+            query = urllib.parse.urlencode({"key": api_key, "query": f"hostname:{domain}", "page": page})
             url = f"https://api.shodan.io/shodan/host/search?{query}"
+            await _throttle("shodan")
             data = await _request_json_async(url)
             matches = data.get("matches")
             matches = matches if isinstance(matches, list) else []
@@ -174,10 +232,19 @@ async def fetch_shodan(domain: str, api_key: str = None) -> Tuple[str, Set[str]]
             if not matches or page * SHODAN_PAGE_SIZE >= total:
                 break
         logger.info("[+] Shodan discovered %d subdomains (up to %d pages).", len(subdomains), MAX_API_PAGES)
+    except urllib.error.HTTPError as e:
+        _on_http_error("shodan", "Shodan", e)
     except Exception as e:
         logger.warning("[-] Shodan request failed (%s); API key redacted.", type(e).__name__)
         toolstatus.record("shodan", "failed", type(e).__name__)
     return "shodan", subdomains
+
+
+def _censys_auth(key: str) -> dict:
+    """Censys Search v2 uses HTTP Basic auth with "API_ID:API_SECRET"; a single token is sent as Bearer."""
+    if ":" in key:
+        return {"Authorization": "Basic " + base64.b64encode(key.encode()).decode()}
+    return {"Authorization": f"Bearer {key}"}
 
 
 async def fetch_censys(domain: str, api_key: str = None) -> Tuple[str, Set[str]]:
@@ -197,7 +264,8 @@ async def fetch_censys(domain: str, api_key: str = None) -> Tuple[str, Set[str]]
             if cursor:
                 params["cursor"] = cursor
             url = "https://search.censys.io/api/v2/hosts/search?" + urllib.parse.urlencode(params)
-            data = await _request_json_async(url, {"Authorization": f"Bearer {api_key}"})
+            await _throttle("censys")
+            data = await _request_json_async(url, _censys_auth(api_key))
             result = data.get("result")
             result = result if isinstance(result, dict) else {}
             hits = result.get("hits")
@@ -223,7 +291,37 @@ async def fetch_censys(domain: str, api_key: str = None) -> Tuple[str, Set[str]]
             seen_cursors.add(next_cursor)
             cursor = next_cursor
         logger.info("[+] Censys discovered %d subdomains (up to %d pages).", len(subdomains), MAX_API_PAGES)
+    except urllib.error.HTTPError as e:
+        _on_http_error("censys", "Censys", e)
     except Exception as e:
         logger.warning("[-] Censys request failed (%s).", type(e).__name__)
         toolstatus.record("censys", "failed", type(e).__name__)
     return "censys", subdomains
+
+
+async def fetch_securitytrails(domain: str, api_key: str = None) -> Tuple[str, Set[str]]:
+    """SecurityTrails subdomain list (R2). The API returns bare labels ("www"), so the domain is appended."""
+    subdomains: Set[str] = set()
+    if not api_key:
+        logger.info("[-] Skipped SecurityTrails (No API Key provided).")
+        return "securitytrails", subdomains
+    domain = _root_domain(domain)
+    url = (f"https://api.securitytrails.com/v1/domain/{urllib.parse.quote(domain, safe='.-')}/subdomains"
+           "?children_only=false&include_inactive=true")
+    logger.info("[*] Querying SecurityTrails...")
+    try:
+        await _throttle("securitytrails")
+        data = await _request_json_async(url, {"APIKEY": api_key, "Accept": "application/json"})
+        labels = data.get("subdomains")
+        for label in labels if isinstance(labels, list) else []:
+            if isinstance(label, str) and label.strip():
+                name = f"{label.strip().lower().strip('.')}.{domain}"
+                if _under_domain(name, domain):
+                    subdomains.add(name)
+        logger.info("[+] SecurityTrails discovered %d subdomains.", len(subdomains))
+    except urllib.error.HTTPError as e:
+        _on_http_error("securitytrails", "SecurityTrails", e)
+    except Exception as e:
+        logger.warning("[-] SecurityTrails request failed (%s).", type(e).__name__)
+        toolstatus.record("securitytrails", "failed", type(e).__name__)
+    return "securitytrails", subdomains

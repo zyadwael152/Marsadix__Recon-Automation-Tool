@@ -10,10 +10,11 @@ is gone" and raise a false REMOVED_ASSET alert.
     toolstatus.record("subfinder", "timeout", "kept 120 partial lines")
     toolstatus.degraded()                    # tools whose output may be INCOMPLETE
 
-Statuses: ok | failed | timeout | truncated | missing | skipped
-`degraded()` returns failed / timeout / truncated. A tool that is simply not
-installed ("missing") is reported, but is a stable property of the machine and
-does not by itself make a scan untrustworthy.
+Statuses: ok | failed | timeout | truncated | missing | denied | skipped
+`degraded()` returns failed / timeout / truncated: something went wrong THIS time, so
+the result may be incomplete. "missing" (tool not installed) and "denied" (the provider
+rejected the key / plan: HTTP 401-403) are reported but are stable facts about the setup,
+not an incident: they would otherwise disable disappearance alerts forever.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ from typing import List
 
 log = logging.getLogger(__name__)
 
-STATUSES = ("ok", "failed", "timeout", "truncated", "missing", "skipped")
+STATUSES = ("ok", "failed", "timeout", "truncated", "missing", "denied", "skipped")
 INCOMPLETE = ("failed", "timeout", "truncated")
 
 
@@ -60,8 +61,21 @@ def degraded() -> List[ToolRun]:
 
 
 def summary(runs_: List[ToolRun] | None = None) -> str:
+    """One short line, repeated runs grouped: "alienvault failed x4 (HTTP 429); crt.sh failed (HTTP 502)"."""
     rs = degraded() if runs_ is None else runs_
-    return "; ".join(f"{r.tool} {r.status}" + (f" ({r.detail})" if r.detail else "") for r in rs)
+    groups: dict = {}
+    for r in rs:
+        g = groups.setdefault((r.tool, r.status), {"n": 0, "details": []})
+        g["n"] += 1
+        if r.detail and r.detail not in g["details"]:
+            g["details"].append(r.detail)
+    out = []
+    for (tool, status), g in groups.items():
+        text = f"{tool} {status}" + (f" x{g['n']}" if g["n"] > 1 else "")
+        if g["details"]:
+            text += " (" + ", ".join(g["details"][:2]) + ")"
+        out.append(text)
+    return "; ".join(out)
 
 
 def write_json(path) -> None:

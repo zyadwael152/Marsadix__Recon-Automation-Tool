@@ -36,3 +36,12 @@ def _no_real_recon_network(monkeypatch):
     async def _fake_expand_candidates(ctx, target, raw_results):
         return raw_results
     monkeypatch.setattr("marsadix.recon.stage._expand_candidates", _fake_expand_candidates)
+
+
+@pytest.fixture(autouse=True)
+def _no_provider_spacing(monkeypatch):
+    """API providers are spaced out in real scans (rate limits); tests must not wait for that."""
+    from marsadix.recon import api_sources
+    monkeypatch.setattr(api_sources, "PROVIDER_GAP", {})
+    from marsadix.recon import discovery
+    monkeypatch.setattr(discovery, "CRTSH_RETRY_WAITS", (0, 0))

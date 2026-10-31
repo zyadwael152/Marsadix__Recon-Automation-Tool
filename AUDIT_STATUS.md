@@ -16,7 +16,7 @@ This audit is based on the repository snapshot in `/mnt/d/DEPI/Marsadix` (HEAD `
 - Depth zero performs one root discovery pass without recursive expansion.
 - Discovery no longer drops valid subdomains merely because labels are long or contain five or more digits; tool output is decoded with replacement and malformed/log lines are filtered.
 - Recursive discovery sorts and caps target batches deterministically and checks domain-label boundaries.
-- SecurityTrails was removed from `Config`, `ENV_MAP` and `.env.example`; its fetch function no longer exists.
+- SecurityTrails had been removed from `Config`, `ENV_MAP` and `.env.example` because no fetcher existed (a key that did nothing). It is back WITH a real fetcher (`recon/api_sources.fetch_securitytrails`), as the R2 feature list requires.
 - Chaos API key is passed through `PDCP_API_KEY` in the child environment instead of command-line arguments.
 - CDN classification no longer treats generic `amazon`, `google`, `azure`, or `microsoft` ownership as sufficient evidence of a CDN.
 - Third-party ASN lookup is restricted to public IPs; PTR results are forward-confirmed against the original public IPs before being accepted.
