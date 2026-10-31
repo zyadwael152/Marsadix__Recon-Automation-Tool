@@ -190,7 +190,7 @@ async def _async_discover_single(domain: str, api_keys: dict) -> Dict[str, List[
     return merge_and_track(tool_outputs)
 
 async def _async_discover_recursive(domain: str, api_keys: dict, max_depth: int) -> Dict[str, List[str]]:
-    master_results = {}
+    master_results = {domain: ["manual"]}
     targets_to_scan = {domain}
     scanned_targets = set()
     # Depth zero means perform discovery on the root target, but do not recurse.
