@@ -1,0 +1,88 @@
+# Member 2 extension configuration (optional).
+#
+# The extension can also use a normal Marsadix config.toml. If the same file
+# contains [member2], the extension CLI passes only the base keys to the base
+# loader and reads this table itself.
+#
+# Precedence: defaults < [member2] < MARSADIX_M2_* environment < CLI flags.
+
+[member2]
+db_path = "marsadix.db"
+output_dir = "output"
+write_outputs = true
+
+# Politeness. The same rate is passed to httpx/katana/gau where supported.
+rate_limit = 10
+request_timeout = 10.0
+tool_timeout = 300
+tool_threads = 2
+retries = 2
+max_concurrency = 8
+
+# Archive collection. Passive scans use archive APIs only and never contact the
+# target. Common Crawl is opt-in because it shares the target name with a third
+# party, exactly like gau/Wayback.
+archive_sources = ["gau", "wayback"]
+archive_timeout = 45.0
+archive_pages = 2
+max_archive_urls = 5000
+max_urls = 5000
+max_per_host = 300
+max_hosts_for_assets = 500
+discover_hosts = true
+dns_timeout = 5.0
+
+# Crawling. "auto" uses katana when installed, otherwise the stdlib crawler.
+# "both" merges katana and the built-in crawler; "builtin" is useful offline.
+crawler_backend = "auto"
+crawl_depth = 2
+max_pages = 40
+max_links_per_page = 500
+respect_robots = true
+
+# JavaScript endpoint extraction (static parsing, never execution).
+extract_js = true
+max_js_files = 80
+max_js_bytes = 1000000
+
+# Status verification. The default filter drops 404s and similar dead links
+# while retaining auth/redirect pages that are still interesting inventory.
+check_status = true
+status_allow = "200-399,401,403,405"
+max_http_checks = 2000
+verify_tls = true
+follow_redirects = false
+drop_tracking_params = true
+
+# Set true only for an explicitly authorised lab whose scope lists the private
+# address/range. Never enable this for a public target.
+allow_private = false
+
+# Optional explicit tool paths; empty means .tools/bin then PATH.
+tools_dir = ""
+httpx_bin = ""
+katana_bin = ""
+gau_bin = ""
+subfinder_bin = ""
+dnsx_bin = ""
+nuclei_bin = ""
+
+# Nuclei A1-A4. This is active reconnaissance, so it only runs in standard/full
+# scans with an explicit scope. Tags select the A1 takeover, A2 exposure and
+# A3 technology/CVE template groups; A4 adds rate/timeout/severity/scope bounds.
+nuclei_enabled = true
+nuclei_tags = ["takeover", "exposure", "misconfig", "cve", "tech"]
+nuclei_severities = ["critical", "high", "medium", "low", "info"]
+nuclei_timeout = 300
+nuclei_rate_limit = 0
+nuclei_max_targets = 50
+
+# W7/W9/W10 passive security inspection. Header/WAF checks and TLS probes make
+# requests to in-scope URLs; JS secret scanning only reads already-downloaded JS.
+security_headers = true
+js_secret_scan = true
+tls_check = true
+security_max_targets = 20
+
+log_level = "INFO"
+log_file = ""
