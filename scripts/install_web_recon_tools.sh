@@ -2,8 +2,8 @@
 # Install the external tools used by the Member 2 web-surface extension.
 #
 # Usage:
-#   ./scripts/install_member2_tools.sh
-#   MARSADIX_TOOLS_DIR="$HOME/.local/bin" ./scripts/install_member2_tools.sh
+#   ./scripts/install_web_recon_tools.sh
+#   MARSADIX_TOOLS_DIR="$HOME/.local/bin" ./scripts/install_web_recon_tools.sh
 #
 # The script installs the web/archive tools plus Nuclei for the A1-A4 ASM
 # checks. Existing files in the target directory are left alone. Nuclei is
@@ -33,7 +33,7 @@ install_go() {
 
 # Pinned where a stable tag is known; ProjectDiscovery tools use latest because
 # their release tags change frequently and the extension validates flags at
-# runtime through `marsadix-member2 doctor`.
+# runtime through `marsadix-web-recon doctor`.
 install_go "gau 2.2.4" "github.com/lc/gau/v2/cmd/gau@v2.2.4"
 install_go "waybackurls" "github.com/tomnomnom/waybackurls@latest"
 install_go "subfinder" "github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest"
@@ -57,4 +57,4 @@ echo "Add the directory to PATH for this shell:"
 echo "    export PATH=\"$TOOLS_DIR:\$PATH\""
 echo
 echo "Then verify:"
-echo "    python -m marsadix_member2 doctor"
+echo "    python -m marsadix.web_recon doctor"

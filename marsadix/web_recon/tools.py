@@ -102,7 +102,7 @@ def _candidate_dirs(config: Member2Config) -> list[Path]:
     dirs: list[Path] = []
     if config.tools_dir:
         dirs.append(Path(config.tools_dir))
-    dirs.append(Path(__file__).resolve().parent.parent / ".tools" / "bin")
+    dirs.append(Path(__file__).resolve().parent.parent.parent / ".tools" / "bin")
     return [d for d in dirs if d.is_dir()]
 
 

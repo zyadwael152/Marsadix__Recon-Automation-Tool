@@ -3,7 +3,7 @@
 **Project:** Marsadix Recon Automation  
 **Base snapshot:** `43fabb8` (`feat: complete Person 5 tasks`)  
 **Date:** 2026-10-30  
-**Implementation:** additive `marsadix_member2` package plus reuse of the base process layer  
+**Implementation:** additive `marsadix.web_recon` package plus reuse of the base process layer  
 **Base repository state:** local checkout fast-forwarded to the remote snapshot; no base source files were edited by this deliverable.
 
 ---
@@ -134,7 +134,7 @@ coverage.
 All files live under:
 
 ```
-/mnt/d/opencode-workspace/marsadix_project/marsadix_member2/
+/mnt/d/opencode-workspace/marsadix_project/Marsadix__Recon-Automation-Tool/marsadix/web_recon/
 ```
 
 | Module | Responsibility |
@@ -158,14 +158,14 @@ All files live under:
 | `storage.py` | Scan/scope loading, WebItem persistence, text/JSON outputs |
 | `pipeline.py` | End-to-end orchestration and report model |
 | `stage.py` | Optional `run(ctx)` adapter for a custom/extension-aware stage list |
-| `cli.py` | `marsadix-member2` commands: `run`, `discover`, `doctor`, `normalize` |
-| `__main__.py` | `python -m marsadix_member2` entry point |
+| `cli.py` | `marsadix-web-recon` commands: `run`, `discover`, `doctor`, `normalize` |
+| `__main__.py` | `python -m marsadix.web_recon` entry point |
 
 Supporting files at project root:
 
 - `pyproject.toml` — installable package and console script.
-- `config.member2.example.toml` — documented configuration.
-- `scripts/install_member2_tools.sh` — reproducible Go tool installation.
+- `marsadix/config/config.web_recon.example.toml` — documented configuration.
+- `scripts/install_web_recon_tools.sh` — reproducible Go tool installation.
 - `tests/` — 48 extension tests.
 - `MEMBER_2_AUDIT_AND_IMPLEMENTATION_REPORT.md` — this document.
 
@@ -336,56 +336,56 @@ cd /mnt/d/opencode-workspace/marsadix_project
 python3 -m venv .venv
 .venv/bin/pip install -e ./Marsadix__Recon-Automation-Tool
 .venv/bin/pip install -e . --no-build-isolation
-./scripts/install_member2_tools.sh
+./scripts/install_web_recon_tools.sh
 ```
 
 Add the tools directory to `PATH` or pass it explicitly:
 
 ```bash
 export PATH="$PWD/.tools/bin:$PATH"
-.venv/bin/marsadix-member2 doctor
+.venv/bin/marsadix-web-recon doctor
 ```
 
 ### Run after a normal Marsadix scan
 
 ```bash
 # Reuse an existing scan, or let the command auto-resolve/create one.
-.venv/bin/marsadix-member2 run example.com --scan-id 3 --scope scope.txt --json
-.venv/bin/marsadix-member2 run example.com --scope scope.txt --mode full --json
+.venv/bin/marsadix-web-recon run example.com --scan-id 3 --scope scope.txt --json
+.venv/bin/marsadix-web-recon run example.com --scope scope.txt --mode full --json
 
 # Full mode, archive + crawl + JS, custom output:
-.venv/bin/marsadix-member2 \
+.venv/bin/marsadix-web-recon \
   --db marsadix.db --output-dir output --rate 10 \
   run example.com --scope scope.txt --json
 
 # Archive only for a passive scan:
-.venv/bin/marsadix-member2 run example.com --no-crawl --no-status
+.venv/bin/marsadix-web-recon run example.com --no-crawl --no-status
 
 # Skip a provider / use one explicitly:
-.venv/bin/marsadix-member2 run example.com --archive-source wayback
-.venv/bin/marsadix-member2 run example.com --no-archive
+.venv/bin/marsadix-web-recon run example.com --archive-source wayback
+.venv/bin/marsadix-web-recon run example.com --no-archive
 ```
 
 ### Discovery
 
 ```bash
-.venv/bin/marsadix-member2 discover example.com --json
-.venv/bin/marsadix-member2 discover example.com --active --save
-.venv/bin/marsadix-member2 discover example.com --no-passive --active
+.venv/bin/marsadix-web-recon discover example.com --json
+.venv/bin/marsadix-web-recon discover example.com --active --save
+.venv/bin/marsadix-web-recon discover example.com --no-passive --active
 ```
 
 ### URL normalization and tool status
 
 ```bash
-.venv/bin/marsadix-member2 normalize \
+.venv/bin/marsadix-web-recon normalize \
   'HTTPS://Example.com:443/a/../b?utm_source=x&b=2#frag'
-.venv/bin/marsadix-member2 doctor --json
+.venv/bin/marsadix-web-recon doctor --json
 ```
 
 ### Python API
 
 ```python
-from marsadix_member2 import Member2Config, run_web_pipeline
+from marsadix.web_recon import Member2Config, run_web_pipeline
 
 report = run_web_pipeline(
     target="example.com",
@@ -407,7 +407,7 @@ print(report.to_dict())
 ### Base-pipeline integration
 
 The base `marsadix/core/pipeline.py` stage list and empty `marsadix/asm/stage.py`
-were not edited. The extension provides `marsadix_member2.stage:run(ctx)` with
+were not edited. The extension provides `marsadix.web_recon.stage:run(ctx)` with
 the same `ctx` contract for a custom stage list, and `run_web_pipeline()` for an
 explicit post-scan call. Automatic invocation by the base CLI is not claimed.
 
@@ -544,7 +544,7 @@ cd /mnt/d/opencode-workspace/marsadix_project
 .venv/bin/python -m pytest -q tests                                   # 48 passed
 
 # 2. Tool resolution / PD HTTPX flavor check
-.venv/bin/marsadix-member2 doctor --json
+.venv/bin/marsadix-web-recon doctor --json
 
 # 3. Confirm the aligned base snapshot and local state
 cd Marsadix__Recon-Automation-Tool
@@ -563,11 +563,11 @@ the remote snapshot on 2026-10-30; the extension package is the only new source.
 
 | Requirement | Implementation | What it does | Evidence |
 | --- | --- | --- | --- |
-| Nuclei A1 — takeover templates | `marsadix_member2/nuclei.py` | Selects takeover tags, accepts JSONL matches, maps them to `FindingSource.NUCLEI` and the `nuclei-takeover` skill group. | `test_security_nuclei.py`; mocked JSONL runner |
-| Nuclei A2 — exposures/misconfigurations | `marsadix_member2/nuclei.py` | Selects exposure/misconfiguration tags and maps matches to `nuclei-exposures`; all matched URLs are re-checked against scope. | Same |
-| Nuclei A3 — technology/CVE templates | `marsadix_member2/nuclei.py` | Selects technology/CVE tags, extracts CVE IDs from `classification.cve-id`, and maps findings to `nuclei-tech-cve` / `cve_match`. | Same |
+| Nuclei A1 — takeover templates | `marsadix/web_recon/nuclei.py` | Selects takeover tags, accepts JSONL matches, maps them to `FindingSource.NUCLEI` and the `nuclei-takeover` skill group. | `test_security_nuclei.py`; mocked JSONL runner |
+| Nuclei A2 — exposures/misconfigurations | `marsadix/web_recon/nuclei.py` | Selects exposure/misconfiguration tags and maps matches to `nuclei-exposures`; all matched URLs are re-checked against scope. | Same |
+| Nuclei A3 — technology/CVE templates | `marsadix/web_recon/nuclei.py` | Selects technology/CVE tags, extracts CVE IDs from `classification.cve-id`, and maps findings to `nuclei-tech-cve` / `cve_match`. | Same |
 | Nuclei A4 — safety enforcement | `nuclei.py`, `pipeline.py` | Explicit `-tags`/`-severity`, capped `-rate-limit`/request `-timeout`/process budget/`-retries`, `-dr`, `-ni`, `-duc`, `-jsonl`, scope checks on inputs and outputs, target cap, DNS/private-address check, passive-mode suppression, non-fatal missing binary. | Same; fake-binary smoke test and live `nuclei v3.11.1` run |
-| W7 — security headers/WAF | `marsadix_member2/security.py` | Fetches in-scope HTTP(S) responses; reports missing HSTS/CSP/XCTO/XFO/Referrer-Policy/Permissions-Policy; fingerprints common WAF headers/cookies as informational evidence. | `test_security_nuclei.py`; local-server pipeline test |
+| W7 — security headers/WAF | `marsadix/web_recon/security.py` | Fetches in-scope HTTP(S) responses; reports missing HSTS/CSP/XCTO/XFO/Referrer-Policy/Permissions-Policy; fingerprints common WAF headers/cookies as informational evidence. | `test_security_nuclei.py`; local-server pipeline test |
 | W9 — JavaScript secrets | `security.py`, `js_extract.py` | Scans already-downloaded JS for high-confidence AWS/Google/Slack/GitHub/Stripe/private-key/JWT/generic-token patterns; stores only redacted evidence and offsets. | `test_js_secret_scan_redacts_values`; pipeline `secret_findings` handoff |
 | W10 — TLS/SSL analysis | `security.py` | Probes HTTPS hosts with stdlib TLS; reports handshake failure, untrusted/expired/expiring certificates, and TLS 1.0/1.1; HTTP-only inputs produce `skipped`, not a false failure. | TLS unit tests; local HTTP pipeline test |
 | Passive-mode enforcement | `storage.py`, `pipeline.py`, `cli.py` | `--mode passive` overrides the effective mode even for an existing full scan; skips crawl, JS, status checks, headers/WAF, TLS, and Nuclei; still allows passive archive APIs. | `test_mode_override_keeps_existing_active_scan_passive`; passive no-contact test |
@@ -579,12 +579,12 @@ the remote snapshot on 2026-10-30; the extension package is the only new source.
 
 - Remote repository: `https://github.com/zyadwael152/Marsadix__Recon-Automation-Tool`.
 - Audited remote `origin/main` and local base checkout: `43fabb8` (`feat: complete Person 5 tasks`), confirmed with `git fetch`, `git rev-parse`, and `git ls-remote` on 2026-10-30.
-- Local base checkout is clean (`git status --short` empty). The extension lives outside the base source tree in `marsadix_member2/`; the root `tests/`, `config.member2.example.toml`, `scripts/`, and `MEMBER_2_AUDIT_AND_IMPLEMENTATION_REPORT.md` are project-level additions.
+- Local base checkout is clean (`git status --short` empty). The extension now lives inside the main package at `marsadix/web_recon/`; `tests/`, `marsadix/config/config.web_recon.example.toml`, `scripts/`, and `docs/MEMBER_2_AUDIT_AND_IMPLEMENTATION_REPORT.md` are project-level additions.
 - No base file is patched or overwritten. Because the extension uses new file paths, a normal Git merge/addition cannot create textual conflicts with the remote base files.
 - API compatibility was audited by resolving every `marsadix.*` import in the extension against the remote snapshot; no missing base modules were found. The extension depends on `marsadix.db`, `models`, `core.scope`, `core.textfile`, `core.netguard`, `core.aproc`, `core.limits`, `core.toolstatus`, `core.runner`, `owasp`, `skills`, `recon.confidence`, and `core.config`.
 - The schema assumption matches remote schema v3: `Finding` fields and the existing `findings` table/`db.save_many` helper are used as-is. No migration is introduced.
-- Runtime order: install the remote base package first, then install `marsadix-member2` editable. The extension expects the base `marsadix` package to be importable; it does not vendor a second copy of the models or database layer.
-- Integration is explicit, not automatic. The remote base `marsadix/asm/stage.py` is still empty, so adding the extension to a normal base scan requires either the optional `marsadix_member2.stage:run` adapter or a direct `run_web_pipeline()` call. The extension does not silently modify the base stage list.
+- Runtime order: install the `marsadix` package editable; the extension is now a subpackage (`marsadix.web_recon`) and shares the same models and database layer.
+- Integration is explicit, not automatic. The remote base `marsadix/asm/stage.py` is still empty, so adding the extension to a normal base scan requires either the optional `marsadix.web_recon.stage:run` adapter or a direct `run_web_pipeline()` call. The extension does not silently modify the base stage list.
 - The remote `AUDIT_STATUS.md` remains a base-repository audit and still describes base gaps such as absent ASM integration. It is not a claim about this extension; this report is the authoritative Member 2 extension status until the extension is merged and the remote audit is updated.
 
 **Compatibility caveat:** this is verified against `43fabb8`, not against arbitrary future remote commits. If the remote base changes internal APIs (especially `core.aproc`, `core.runner`, `models.Finding`, `db.save_many`, or `skills`), re-run both suites and adjust the adapter. The extension avoids private base attributes. It does use the standard-library private certificate decoder `ssl._ssl._test_decode_cert` in a fallback path for certificate expiry metadata; if that helper changes, the code degrades to trust/protocol findings without crashing.
@@ -593,10 +593,10 @@ the remote snapshot on 2026-10-30; the extension package is the only new source.
 
 | Concern | Status | Detail |
 | --- | --- | --- |
-| Process execution | **Unified** | `marsadix_member2.tools.run_tool` delegates to base `core.aproc.run_exec`; it uses base `core.limits` for slots/timeouts and base `core.toolstatus` for status recording. |
+| Process execution | **Unified** | `marsadix.web_recon.tools.run_tool` delegates to base `core.aproc.run_exec`; it uses base `core.limits` for slots/timeouts and base `core.toolstatus` for status recording. |
 | Child environment | **Reused** | Process execution inherits the base minimal-child-environment behavior through `core.aproc`/`core.childenv`; tool wrappers do not construct their own secret-bearing environment. |
 | Tool discovery | **Hybrid, intentional** | The extension has `ToolResolver` because it supports `*_bin` overrides, `.tools/bin`, and `tools_dir`; it falls back to base `core.runner.find_tool` for PATH lookup. This is configuration logic, not a second process runner. |
-| JSONL parsing | **Unified** | `marsadix_member2.tools.parse_json_lines` now delegates to base `core.runner.parse_json_lines` and only filters to object records. |
+| JSONL parsing | **Unified** | `marsadix.web_recon.tools.parse_json_lines` now delegates to base `core.runner.parse_json_lines` and only filters to object records. |
 | Database schema/models | **Reused** | No duplicate schema; extension imports `marsadix.db` and `marsadix.models` and writes `Finding`, `WebItem`, and `Asset` objects through those helpers. |
 | Scope/network safety | **Reused primitives** | Extension wraps base `Scope`, `netguard`, and `valid_hostname`; it adds web-specific normalization and URL filtering rather than a second scope implementation. |
 | High-level Katana/HTTPX/GAU adapters | **Not fully unified** | `run_katana`, `run_httpx_verify`, and `run_gau` remain in the extension because base `web/probe.py` exposes a narrower contract: it hardcodes binary names and returns URL strings/dicts without the extension’s configurable binary paths, archive provider flags, parent/status metadata, or fallback behavior. They are adapters over the unified runner, not duplicate process runners. |
@@ -628,20 +628,20 @@ the remote snapshot on 2026-10-30; the extension package is the only new source.
 | W10 TLS/SSL | **Fulfilled** | Expiry/trust/protocol findings; HTTP skip behavior. |
 | Passive-mode strictness | **Fulfilled** | Effective override suppresses all active probes. |
 | Regression verification | **Fulfilled** | 48 extension + 378 base tests passed, 0 failures. |
-| Documentation/config | **Fulfilled** | This report, `config.member2.example.toml`, install script. |
+| Documentation/config | **Fulfilled** | This report, `marsadix/config/config.web_recon.example.toml`, install script. |
 
 **Yes, all requested Member 2 deliverables in the current task list are implemented at the extension level.** Three boundaries remain explicit: (1) the base `asm` stage is not automatically wired; (2) live verification used `testasp.vulnweb.com` because the requested `testphp.vulnweb.com` host was unreachable from this network on 2026-10-30; (3) high-level Katana/HTTPX/GAU adapters retain some duplicated command-shaping logic until the base API is extended.
 
 ### 11.5 Current local codebase, categorized
 
 - **Base platform (`Marsadix__Recon-Automation-Tool/`)**: remote `43fabb8`, clean, providing recon, web, ports, scope, database, models, reports, and process primitives. No Member 2 source edits.
-- **Web-surface collection (`marsadix_member2/archive.py`, `crawler.py`, `js_extract.py`, `verify.py`, `discovery.py`)**: archive APIs, Katana/built-in crawling, JS endpoint extraction, status verification, subdomain discovery.
+- **Web-surface collection (`marsadix/web_recon/archive.py`, `crawler.py`, `js_extract.py`, `verify.py`, `discovery.py`)**: archive APIs, Katana/built-in crawling, JS endpoint extraction, status verification, subdomain discovery.
 - **Safety and transport (`scope_filter.py`, `http_client.py`, `rate_limit.py`, `logging_utils.py`, `errors.py`)**: canonicalization/scope checks, manual redirects, bounded HTTP, token bucket, redaction, structured outcomes.
 - **Tool integration (`tools.py`, `nuclei.py`)**: base-backed process execution, tool resolution, Katana/HTTPX/GAU/Subfinder adapters, Nuclei A1–A4.
 - **Security inspection (`security.py`)**: W7 headers/WAF, W9 secret patterns, W10 TLS analysis.
 - **Persistence/orchestration (`storage.py`, `pipeline.py`, `stage.py`, `cli.py`, `__main__.py`)**: scan resolution, web/finding persistence, outputs, mode gating, optional stage adapter, commands.
 - **Tests (`tests/`)**: 48 tests covering parsers, normalization/config, scope/HTTP/crawler, tool wrappers, discovery/storage, pipeline, scan resolution, security, and Nuclei.
-- **Project assets**: `config.member2.example.toml`, `scripts/install_member2_tools.sh`, `pyproject.toml`, this audit report, local `.tools/bin`, and runtime `output/` artifacts.
+- **Project assets**: `marsadix/config/config.web_recon.example.toml`, `scripts/install_web_recon_tools.sh`, `pyproject.toml`, this audit report, local `.tools/bin`, and runtime `output/` artifacts.
 - **Runtime state**: local `marsadix.db` and output files are generated artifacts, not source deliverables; the base test checkout remains clean.
 
 ### 11.6 Final verification
@@ -667,6 +667,6 @@ Residual risks are the same as Section 9: live third-party archive availability,
 
 - The requested target `testphp.vulnweb.com` resolved to `44.228.249.3`, but TCP 80/443 timed out repeatedly; the sibling Acunetix demo host `http://testasp.vulnweb.com/` was reachable and was used as the live substitute.
 - Active scans require a scope file and global flags before the subcommand. The effective command shape was:
-  `marsadix-member2 --config <cfg> --db marsadix.db run testasp.vulnweb.com --mode full --scope <scope-file> --seed http://testasp.vulnweb.com/ --no-archive --no-crawl --json`.
+  `marsadix-web-recon --config <cfg> --db marsadix.db run testasp.vulnweb.com --mode full --scope <scope-file> --seed http://testasp.vulnweb.com/ --no-archive --no-crawl --json`.
 - Nuclei was initially given a `-timeout` equal to the 300-second process budget; broad template tags overloaded the demo host and the process was killed. The wrapper was corrected to pass the configured per-request timeout (`request_timeout=10`) while retaining `nuclei_timeout` as the process budget.
 - A focused live re-run with `nuclei_tags=["tech"]` and `nuclei_rate_limit=10` completed in `113.7 s`: Nuclei returned `3` findings (`waf-detect`, `microsoft-iis-version`, `tech-detect`) and persisted them with `source=nuclei`.

@@ -2,10 +2,10 @@
 
 Examples (after a normal Marsadix scan):
 
-    marsadix-member2 run target.example --scope scope.txt --json
-    marsadix-member2 run target.example --scan-id 4 --no-archive --no-crawl
-    marsadix-member2 discover target.example --active --json
-    marsadix-member2 doctor
+    marsadix-web-recon run target.example --scope scope.txt --json
+    marsadix-web-recon run target.example --scan-id 4 --no-archive --no-crawl
+    marsadix-web-recon discover target.example --active --json
+    marsadix-web-recon doctor
 """
 
 from __future__ import annotations
@@ -257,7 +257,7 @@ def cmd_normalize(args) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="marsadix-member2",
+        prog="marsadix-web-recon",
         description="Member 2 web-surface extension for Marsadix (URLs, archives, JS endpoints).")
     p.add_argument("-v", "--verbose", action="store_true")
     p.add_argument("--config", metavar="FILE", help="config.toml (base or [member2] section)")

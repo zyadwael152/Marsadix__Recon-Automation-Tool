@@ -8,13 +8,13 @@ import pytest
 from marsadix import db
 from marsadix.core.scope import Scope
 from marsadix.models import Scan, ScanMode
-from marsadix_member2.archive import ArchiveBatch
-from marsadix_member2.cli import main
-from marsadix_member2.config import Member2Config
-from marsadix_member2.discovery import SubdomainEnumerator
-from marsadix_member2.errors import TOOL_OK, ToolOutcome
-from marsadix_member2.scope_filter import ScopeEnforcer
-from marsadix_member2.tools import (
+from marsadix.web_recon.archive import ArchiveBatch
+from marsadix.web_recon.cli import main
+from marsadix.web_recon.config import Member2Config
+from marsadix.web_recon.discovery import SubdomainEnumerator
+from marsadix.web_recon.errors import TOOL_OK, ToolOutcome
+from marsadix.web_recon.scope_filter import ScopeEnforcer
+from marsadix.web_recon.tools import (
     ArchiveRecord, ToolResolver, run_gau, run_httpx_verify, run_katana,
 )
 
@@ -53,7 +53,7 @@ def test_discovery_merges_sources_and_stores_assets(example_scan, tmp_path, monk
             outcomes=[ToolOutcome("wayback", TOOL_OK)])
 
     enumerator = SubdomainEnumerator(cfg, enforcer)
-    monkeypatch.setattr("marsadix_member2.discovery.run_subfinder", fake_subfinder)
+    monkeypatch.setattr("marsadix.web_recon.discovery.run_subfinder", fake_subfinder)
     monkeypatch.setattr(enumerator, "fetch_crtsh", fake_crtsh)
     monkeypatch.setattr(enumerator.archives, "collect", fake_archive)
 

@@ -40,8 +40,8 @@ _ENV_PREFIX = "MARSADIX_M2_"
 
 
 def _package_tools_dir() -> str:
-    """Sibling .tools/bin created by scripts/install_member2_tools.sh."""
-    candidate = Path(__file__).resolve().parent.parent / ".tools" / "bin"
+    """Sibling .tools/bin created by scripts/install_web_recon_tools.sh."""
+    candidate = Path(__file__).resolve().parent.parent.parent / ".tools" / "bin"
     return str(candidate) if candidate.is_dir() else ""
 
 

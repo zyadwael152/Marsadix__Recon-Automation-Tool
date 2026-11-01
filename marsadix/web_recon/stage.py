@@ -2,7 +2,7 @@
 
 The base pipeline's stage list is deliberately not patched by this package.
 If a team decides to add the extension as a post-web stage, point the loader at
-`marsadix_member2.stage:run`; the signature matches the base stage contract.
+`marsadix.web_recon.stage:run`; the signature matches the base stage contract.
 
 Returning a dict with a `skipped` key makes the base pipeline display the run
 as skipped (for example, passive scans with no archive providers).

@@ -15,9 +15,13 @@ dev = ["pytest"]
 
 [project.scripts]
 marsadix = "marsadix.cli:main"
+marsadix-web-recon = "marsadix.web_recon.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["marsadix*"]
+
+[tool.setuptools.package-data]
+marsadix = ["config/*.toml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -37,7 +37,7 @@ def configure_logging(verbose: bool = False, log_file: Optional[str] = None,
     callers keep whatever logging configuration the host application set.
     """
     level = logging.DEBUG if verbose else logging.INFO
-    logger = logging.getLogger("marsadix_member2")
+    logger = logging.getLogger("marsadix.web_recon")
     logger.setLevel(level)
 
     if not force and (logger.handlers or logging.getLogger().handlers):

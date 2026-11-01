@@ -1,8 +1,8 @@
 import pytest
 
-from marsadix_member2.config import Member2Config, parse_status_ranges
-from marsadix_member2.errors import ConfigError, ScopeViolation
-from marsadix_member2.normalize import (
+from marsadix.web_recon.config import Member2Config, parse_status_ranges
+from marsadix.web_recon.errors import ConfigError, ScopeViolation
+from marsadix.web_recon.normalize import (
     classify_kind, dedupe_normalized, is_under_domain, normalize_url,
 )
 
@@ -74,7 +74,7 @@ def test_status_spec_parser():
 
 
 def test_toml_section_accepts_booleans_and_tuples(tmp_path):
-    from marsadix_member2.config import load_member2_config
+    from marsadix.web_recon.config import load_member2_config
     path = tmp_path / "config.toml"
     path.write_text(
         "db_path = 'custom.db'\nrate_limit = 7\n\n[member2]\n"

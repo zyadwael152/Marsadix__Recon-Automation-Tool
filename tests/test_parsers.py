@@ -3,10 +3,10 @@ import json
 
 import pytest
 
-from marsadix_member2.archive import ArchiveCollector, host_sources
-from marsadix_member2.config import Member2Config
-from marsadix_member2.js_extract import extract_urls, looks_like_js
-from marsadix_member2.tools import ArchiveRecord, _gau_record, _httpx_record, _katana_record
+from marsadix.web_recon.archive import ArchiveCollector, host_sources
+from marsadix.web_recon.config import Member2Config
+from marsadix.web_recon.js_extract import extract_urls, looks_like_js
+from marsadix.web_recon.tools import ArchiveRecord, _gau_record, _httpx_record, _katana_record
 
 
 def test_katana_jsonl_record():
@@ -91,7 +91,7 @@ def test_wayback_and_commoncrawl_parsing(monkeypatch):
 
 
 def test_archive_dedup_prefers_record_with_status():
-    from marsadix_member2.archive import ArchiveBatch
+    from marsadix.web_recon.archive import ArchiveBatch
     # host_sources is the only public helper used by the pipeline here.
     recs = [ArchiveRecord("https://e.test/a", "gau", None),
             ArchiveRecord("https://e.test/a", "wayback", 200)]

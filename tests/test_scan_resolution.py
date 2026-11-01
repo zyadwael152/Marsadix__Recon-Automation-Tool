@@ -4,9 +4,9 @@ import pytest
 
 from marsadix import db
 from marsadix.models import Scan, ScanMode
-from marsadix_member2.config import Member2Config
-from marsadix_member2.pipeline import run_web_pipeline
-from marsadix_member2.storage import load_scan
+from marsadix.web_recon.config import Member2Config
+from marsadix.web_recon.pipeline import run_web_pipeline
+from marsadix.web_recon.storage import load_scan
 
 
 @pytest.fixture
@@ -36,7 +36,7 @@ def test_mismatched_scan_id_resolves_latest_scan_for_target(scan_conn, caplog):
     old_id = _save(scan_conn, "example.com")
     wanted_id = _save(scan_conn, "testphp.vulnweb.com")
 
-    with caplog.at_level(logging.WARNING, logger="marsadix_member2.storage"):
+    with caplog.at_level(logging.WARNING, logger="marsadix.web_recon.storage"):
         row = load_scan(scan_conn, target="testphp.vulnweb.com", scan_id=old_id)
 
     assert row["id"] == wanted_id
@@ -50,7 +50,7 @@ def test_mismatched_scan_id_resolves_latest_scan_for_target(scan_conn, caplog):
 def test_mismatched_scan_id_creates_scan_when_target_has_none(scan_conn, caplog):
     old_id = _save(scan_conn, "example.com")
 
-    with caplog.at_level(logging.WARNING, logger="marsadix_member2.storage"):
+    with caplog.at_level(logging.WARNING, logger="marsadix.web_recon.storage"):
         row = load_scan(scan_conn, target="testphp.vulnweb.com", scan_id=old_id)
 
     assert row["id"] != old_id
@@ -77,7 +77,7 @@ def test_no_scan_id_uses_latest_scan_for_target(scan_conn):
 def test_missing_scan_id_resolves_existing_target_scan(scan_conn, caplog):
     wanted_id = _save(scan_conn, "testphp.vulnweb.com")
 
-    with caplog.at_level(logging.WARNING, logger="marsadix_member2.storage"):
+    with caplog.at_level(logging.WARNING, logger="marsadix.web_recon.storage"):
         row = load_scan(scan_conn, target="testphp.vulnweb.com", scan_id=99999)
 
     assert row["id"] == wanted_id
@@ -85,7 +85,7 @@ def test_missing_scan_id_resolves_existing_target_scan(scan_conn, caplog):
 
 
 def test_unknown_target_with_no_scan_id_is_created(scan_conn, caplog):
-    with caplog.at_level(logging.WARNING, logger="marsadix_member2.storage"):
+    with caplog.at_level(logging.WARNING, logger="marsadix.web_recon.storage"):
         row = load_scan(scan_conn, target="new.example")
 
     assert row["target"] == "new.example"

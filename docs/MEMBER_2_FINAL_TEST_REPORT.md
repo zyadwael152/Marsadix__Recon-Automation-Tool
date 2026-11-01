@@ -2,7 +2,7 @@
 
 - **Date:** 2026-10-30
 - **Workspace:** `/mnt/d/opencode-workspace/marsadix_project`
-- **Module:** `marsadix_member2` v1.0.0
+- **Module:** `marsadix.web_recon` v1.0.0
 - **Live target:** `http://testasp.vulnweb.com/`
 - **Database:** `marsadix.db`
 - **Raw test artifacts:** `test_artifacts/member2_final/`
@@ -45,7 +45,7 @@ The exit code `1` on the passive and full runs was produced by the CLI's normal 
 
 ```bash
 cd /mnt/d/opencode-workspace/marsadix_project
-.venv/bin/marsadix-member2 doctor --json
+.venv/bin/marsadix-web-recon doctor --json
 ```
 
 **Exit code:** `0`
@@ -104,7 +104,7 @@ Full doctor output is preserved at `test_artifacts/member2_final/01-doctor.json`
 
 ```bash
 cd /mnt/d/opencode-workspace/marsadix_project
-.venv/bin/marsadix-member2 normalize 'HTTPS://Example.com:443/a/../b?utm_source=test&b=2#frag'
+.venv/bin/marsadix-web-recon normalize 'HTTPS://Example.com:443/a/../b?utm_source=test&b=2#frag'
 ```
 
 **Exit code:** `0`
@@ -134,7 +134,7 @@ This matches the expected canonicalization contract.
 
 ```bash
 cd /mnt/d/opencode-workspace/marsadix_project
-.venv/bin/marsadix-member2 discover example.com --json
+.venv/bin/marsadix-web-recon discover example.com --json
 ```
 
 **Exit code:** `0`
@@ -186,7 +186,7 @@ outcome commoncrawl skipped
 
 ```bash
 cd /mnt/d/opencode-workspace/marsadix_project
-.venv/bin/marsadix-member2 --db marsadix.db run example.com --mode passive --json
+.venv/bin/marsadix-web-recon --db marsadix.db run example.com --mode passive --json
 ```
 
 **Exit code:** `1`
@@ -248,7 +248,7 @@ The complete JSON output is preserved at `test_artifacts/member2_final/04-passiv
 
 ```bash
 cd /mnt/d/opencode-workspace/marsadix_project
-.venv/bin/marsadix-member2 --db marsadix.db run http://testasp.vulnweb.com/ --mode full --scope scope.txt --json
+.venv/bin/marsadix-web-recon --db marsadix.db run http://testasp.vulnweb.com/ --mode full --scope scope.txt --json
 ```
 
 **Exit code:** `1`
