@@ -16,7 +16,82 @@ that wants to exercise the real discovery logic can still import and call
 `marsadix.recon.discovery.discover_subdomains` directly, bypassing this.
 """
 
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
 import pytest
+
+
+class _Member2Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    ROUTES = {
+        "/": ("text/html", """<html><body>
+            <a href="/about">about</a>
+            <a href="/missing">missing</a>
+            <script src="/static/app.js"></script>
+            <form action="/search"><input name="q"></form>
+        </body></html>"""),
+        "/about": ("text/html", '<a href="/api/v1/users?x=1">users</a>'),
+        "/search": ("text/html", "<html>search</html>"),
+        "/api/v1/users?x=1": ("application/json", '{"users": []}'),
+        "/api/v2/items?q=1": ("application/json", '{"items": []}'),
+        "/api/v3/login": ("application/json", '{"ok": true}'),
+        "/static/app.js": ("application/javascript", """
+            const a = fetch('/api/v2/items?q=1');
+            const b = "/api/v3/login";
+            const c = "https://outside.test/ignored";
+        """),
+        "/robots.txt": ("text/plain", "User-agent: *\nAllow: /\n"),
+    }
+
+    def _serve(self, body: bool):
+        path = self.path
+        if path == "/redirect":
+            self.send_response(302)
+            self.send_header("Location", "/about")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        item = self.ROUTES.get(path)
+        if item is None:
+            payload = b"not found"
+            self.send_response(404)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            if body:
+                self.wfile.write(payload)
+            return
+        ctype, text = item
+        payload = text.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        if body:
+            self.wfile.write(payload)
+
+    def do_GET(self):
+        self._serve(True)
+
+    def do_HEAD(self):
+        self._serve(False)
+
+    def log_message(self, fmt, *args):
+        return
+
+
+@pytest.fixture(scope="session")
+def local_server():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Member2Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address
+    yield f"http://{host}:{port}/"
+    server.shutdown()
+    server.server_close()
+    thread.join(timeout=5)
 
 
 def _fake_discover_subdomains(domain, api_keys=None, *args, **kwargs):
