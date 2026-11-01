@@ -30,7 +30,7 @@ SHODAN_PAGE_SIZE = 100
 # Minimum seconds between two requests to the same provider. Recursive discovery asks every
 # provider once per sub-target at the same time; free tiers (VirusTotal 4/min, Shodan 1/s,
 # OTX anonymous) answer that burst with HTTP 429. Empty dict = no spacing (tests).
-PROVIDER_GAP = {"alienvault": 2.0, "virustotal": 1.0, "shodan": 1.1, "censys": 1.0}
+PROVIDER_GAP = {"alienvault": 2.0, "virustotal": 1.0, "shodan": 1.1}
 _gates: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
 
 
@@ -61,10 +61,30 @@ def _http_note(code: int) -> str:
     return _HTTP_MEANING.get(code, "provider error" if code >= 500 else "request refused")
 
 
+def _provider_message(e: urllib.error.HTTPError) -> str:
+    """The provider's own explanation (short, single line), e.g. "Requires membership or higher"."""
+    try:
+        raw = e.read(400) if hasattr(e, "read") else b""
+    except Exception:
+        return ""
+    text = raw.decode("utf-8", errors="replace").strip()
+    if not text:
+        return ""
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict):
+            text = str(data.get("error") or data.get("message") or data.get("detail") or text)
+    except ValueError:
+        pass
+    return " ".join(text.split())[:160]
+
+
 def _on_http_error(tool: str, label: str, e: urllib.error.HTTPError) -> None:
-    """Say WHAT failed (status + meaning, never the key) and record it correctly:
-    401-403 = setup problem (denied), everything else = this run is incomplete (failed)."""
-    logger.warning("[-] %s failed: HTTP %s - %s.", label, e.code, _http_note(e.code))
+    """Say WHAT failed (status + meaning + what the provider said, never the key) and record it
+    correctly: 401-403 = setup problem (denied), everything else = this run is incomplete (failed)."""
+    said = _provider_message(e)
+    logger.warning("[-] %s failed: HTTP %s - %s.%s", label, e.code, _http_note(e.code),
+                   f" Provider says: {said}" if said else "")
     toolstatus.record(tool, "denied" if e.code in (401, 402, 403) else "failed", f"HTTP {e.code}")
 
 
@@ -166,7 +186,9 @@ async def fetch_alienvault(domain: str, api_key: str = None) -> Tuple[str, Set[s
     domain = _root_domain(domain)
     url = f"https://otx.alienvault.com/api/v1/indicators/domain/{urllib.parse.quote(domain, safe='.-')}/passive_dns"
     logger.info("[*] Querying AlienVault...")
-    headers = {"OTX-API-KEY": api_key} if api_key else {}
+    # OTX reads the key from "X-OTX-API-KEY" (the name its official SDK uses). Sent as "OTX-API-KEY" the key was
+    # ignored and every request counted against the anonymous rate limit (HTTP 429).
+    headers = {"X-OTX-API-KEY": api_key} if api_key else {}
     try:
         for attempt in (1, 2):
             await _throttle("alienvault")
@@ -240,61 +262,26 @@ async def fetch_shodan(domain: str, api_key: str = None) -> Tuple[str, Set[str]]
     return "shodan", subdomains
 
 
-def _censys_auth(key: str) -> dict:
-    """Censys Search v2 uses HTTP Basic auth with "API_ID:API_SECRET"; a single token is sent as Bearer."""
-    if ":" in key:
-        return {"Authorization": "Basic " + base64.b64encode(key.encode()).decode()}
-    return {"Authorization": f"Bearer {key}"}
+_CENSYS_NOTE = ("Censys is skipped: the Legacy Search API (search.censys.io/api/v2) was decommissioned on "
+                "2026-09-30. The replacement Platform API (api.platform.censys.io, CenQL queries) needs a Personal "
+                "Access Token and an organization (Starter tier or higher, per Censys / DefectDojo documentation) "
+                "and is not implemented in Marsadix yet.")
+_censys_noted = False
 
 
 async def fetch_censys(domain: str, api_key: str = None) -> Tuple[str, Set[str]]:
-    """Query Censys Search API v2 and follow bounded cursor pagination."""
-    subdomains: Set[str] = set()
+    """
+    Placeholder: the Censys endpoint this used to call no longer exists, so no request is sent.
+
+    Sending it anyway only produced HTTP 403 "decommissioned" on every scan. When a key is set the
+    reason is logged once per run and recorded as "denied" (a setup fact, not an incomplete scan).
+    """
+    global _censys_noted
     if not api_key:
         logger.info("[-] Skipped Censys (No API Key provided).")
-        return "censys", subdomains
-
-    domain = _root_domain(domain)
-    logger.info("[*] Querying Censys...")
-    cursor = None
-    seen_cursors = set()
-    try:
-        for _ in range(MAX_API_PAGES):
-            params = {"q": f"names: {domain}", "per_page": str(PAGE_SIZE)}
-            if cursor:
-                params["cursor"] = cursor
-            url = "https://search.censys.io/api/v2/hosts/search?" + urllib.parse.urlencode(params)
-            await _throttle("censys")
-            data = await _request_json_async(url, _censys_auth(api_key))
-            result = data.get("result")
-            result = result if isinstance(result, dict) else {}
-            hits = result.get("hits")
-            for hit in hits if isinstance(hits, list) else []:
-                if not isinstance(hit, dict):
-                    continue
-                names = hit.get("names")
-                subdomains.update(_extract_names(
-                    [{"id": name} for name in (names if isinstance(names, list) else [])], domain))
-            links = data.get("links") or result.get("links") or {}
-            next_value = links.get("next") if isinstance(links, dict) else None
-            next_cursor = None
-            if isinstance(next_value, str) and next_value:
-                parsed = urllib.parse.urlsplit(next_value)
-                query_values = urllib.parse.parse_qs(parsed.query)
-                next_cursor = (query_values.get("cursor") or [None])[0]
-                if not next_cursor and not next_value.startswith("http"):
-                    raw_query = next_value.lstrip("?")
-                    query_values = urllib.parse.parse_qs(raw_query)
-                    next_cursor = (query_values.get("cursor") or [None])[0] or raw_query
-            if not next_cursor or next_cursor in seen_cursors:
-                break
-            seen_cursors.add(next_cursor)
-            cursor = next_cursor
-        logger.info("[+] Censys discovered %d subdomains (up to %d pages).", len(subdomains), MAX_API_PAGES)
-    except urllib.error.HTTPError as e:
-        _on_http_error("censys", "Censys", e)
-    except Exception as e:
-        logger.warning("[-] Censys request failed (%s).", type(e).__name__)
-        toolstatus.record("censys", "failed", type(e).__name__)
-    return "censys", subdomains
-
+        return "censys", set()
+    if not _censys_noted:
+        _censys_noted = True
+        logger.warning("[-] %s", _CENSYS_NOTE)
+    toolstatus.record("censys", "denied", "legacy API decommissioned; Platform API not implemented")
+    return "censys", set()

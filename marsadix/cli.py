@@ -278,6 +278,15 @@ def cmd_doctor(a, cfg: Config) -> int:
         print("\n  NOTE (Windows): massdns is a C program with no native Windows build, and puredns needs it.\n"
               "  Tools installed inside WSL are NOT visible to this PowerShell. To use DNS bruteforce, run Marsadix\n"
               "  inside WSL (or Docker). Without it Marsadix falls back to a plain resolver wordlist check.")
+    # Which recon data sources have a key loaded (names only, never values), so "I put the key in"
+    # can be checked instead of guessed.
+    sources = [("VirusTotal", cfg.virustotal_api_key, "VIRUSTOTAL_API_KEY"), ("AlienVault OTX", cfg.otx_api_key, "OTX_API_KEY"),
+               ("Shodan", cfg.shodan_api_key, "SHODAN_API_KEY"), ("Censys (unused: legacy API shut down)", cfg.censys_api_key, "CENSYS_API_KEY"),
+               ("Chaos", cfg.chaos_api_key, "CHAOS_API_KEY")]
+    print("\nRecon data sources (key loaded from .env / environment):")
+    for name, key, var in sources:
+        print(f"  [{'KEY SET' if key else 'no key '}] {name:<15} ({var})")
+    print("  A set key is only sent to its own provider. 'no key' = skipped (AlienVault OTX still runs, anonymously and rate-limited).")
     print(f"\n{len(rows) - missing}/{len(rows)} tools found."
           f" API key: {'set' if cfg.nvd_api_key else 'NOT set (NVD_API_KEY in .env)'}."
           f" Discord webhook: {'set' if cfg.discord_webhook else 'NOT set (DISCORD_WEBHOOK_URL in .env)'}.")
