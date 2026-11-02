@@ -20,7 +20,7 @@ import logging
 import os
 from contextlib import suppress
 from typing import List, Optional, Set
-
+from dataclasses import dataclass
 from ..core import limits, toolstatus
 from ..core.aproc import MAX_OUTPUT_BYTES, kill_process
 from ..core.childenv import child_env
