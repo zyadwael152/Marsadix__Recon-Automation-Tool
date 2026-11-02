@@ -5,15 +5,15 @@ import pytest
 
 from marsadix.core.scope import Scope
 from marsadix.models import FindingSource, Severity
-from marsadix.web_recon import nuclei as nuclei_module
-from marsadix.web_recon.config import Member2Config
-from marsadix.web_recon.errors import TOOL_SKIPPED
-from marsadix.web_recon.nuclei import run_nuclei
-from marsadix.web_recon.scope_filter import ScopeEnforcer
-from marsadix.web_recon.security import (
+from marsadix.asm import nuclei as nuclei_module
+from marsadix.web.config import Member2Config
+from marsadix.web.errors import TOOL_SKIPPED
+from marsadix.asm.nuclei import run_nuclei
+from marsadix.web.scope_filter import ScopeEnforcer
+from marsadix.web.security import (
     SecurityScanner, detect_waf, missing_security_headers, scan_js_secrets,
 )
-from marsadix.web_recon.tools import ToolExecution
+from marsadix.web.tools import ToolExecution
 
 
 class _FakeResponse:

@@ -8,13 +8,13 @@ import pytest
 from marsadix import db
 from marsadix.core.scope import Scope
 from marsadix.models import Scan, ScanMode
-from marsadix.web_recon.archive import ArchiveBatch
+from marsadix.web.crawl import ArchiveBatch
 from marsadix.web_recon.cli import main
-from marsadix.web_recon.config import Member2Config
+from marsadix.web.config import Member2Config
 from marsadix.web_recon.discovery import SubdomainEnumerator
-from marsadix.web_recon.errors import TOOL_OK, ToolOutcome
-from marsadix.web_recon.scope_filter import ScopeEnforcer
-from marsadix.web_recon.tools import (
+from marsadix.web.errors import TOOL_OK, ToolOutcome
+from marsadix.web.scope_filter import ScopeEnforcer
+from marsadix.web.tools import (
     ArchiveRecord, ToolResolver, run_gau, run_httpx_verify, run_katana,
 )
 

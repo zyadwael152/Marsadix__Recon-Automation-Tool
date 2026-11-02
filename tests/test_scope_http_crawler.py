@@ -3,12 +3,12 @@ import asyncio
 import pytest
 
 from marsadix.core.scope import Scope
-from marsadix.web_recon.config import Member2Config
-from marsadix.web_recon.crawler import BuiltinCrawler, LinkExtractor
-from marsadix.web_recon.errors import ScopeViolation, UnsafeTarget
-from marsadix.web_recon.http_client import SafeHTTPClient
-from marsadix.web_recon.rate_limit import AsyncRateLimiter
-from marsadix.web_recon.scope_filter import ScopeEnforcer
+from marsadix.web.config import Member2Config
+from marsadix.web.crawl import BuiltinCrawler, LinkExtractor
+from marsadix.web.errors import ScopeViolation, UnsafeTarget
+from marsadix.web.http_client import SafeHTTPClient
+from marsadix.core.rate_limit import AsyncRateLimiter
+from marsadix.web.scope_filter import ScopeEnforcer
 
 
 def test_scope_enforcer_rejects_out_of_scope_and_private_targets():

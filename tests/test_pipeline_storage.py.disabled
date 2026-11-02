@@ -4,11 +4,11 @@ import pytest
 
 from marsadix import db
 from marsadix.models import Scan, ScanMode, WebItemKind
-from marsadix.web_recon.config import Member2Config
-from marsadix.web_recon.normalize import normalize_url
-from marsadix.web_recon.pipeline import run_web_pipeline
+from marsadix.web.config import Member2Config
+from marsadix.web.normalize import normalize_url
+from marsadix.core.pipeline import run_web_pipeline
 from marsadix.web_recon.storage import CollectedURL, store_web_items
-from marsadix.web_recon.tools import ToolResolver
+from marsadix.web.tools import ToolResolver
 
 
 @pytest.fixture

@@ -26,10 +26,10 @@ from marsadix.models import (
 from marsadix.owasp import get_owasp_category
 from marsadix.skills import get_skill
 
-from .config import Member2Config
-from .errors import TOOL_FAILED, TOOL_MISSING, TOOL_SKIPPED, ToolOutcome, elapsed_ms
-from .scope_filter import ScopeEnforcer
-from .tools import ToolResolver, run_tool
+from ..web.config import Member2Config
+from ..web.errors import TOOL_FAILED, TOOL_MISSING, TOOL_SKIPPED, ToolOutcome, elapsed_ms
+from ..web.scope_filter import ScopeEnforcer
+from ..web.tools import ToolResolver, run_tool
 
 logger = logging.getLogger(__name__)
 

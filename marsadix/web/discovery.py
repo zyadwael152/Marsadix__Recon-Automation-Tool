@@ -28,7 +28,7 @@ from .archive import ArchiveCollector, host_sources
 from .config import Member2Config
 from .errors import TOOL_FAILED, TOOL_OK, ToolOutcome, elapsed_ms, redact
 from .normalize import is_under_domain
-from .rate_limit import AsyncRateLimiter, backoff_delay
+from ..core.rate_limit import AsyncRateLimiter, backoff_delay
 from .scope_filter import ScopeEnforcer
 from .tools import ToolResolver, run_subfinder
 

@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 
 from .. import db
 from ..core import netguard
-from ..core.confidence import compute_source_confidence
+from ..recon.confidence import compute_source_confidence
 from ..core.scope import normalize_host
 from ..core.textfile import safe_filename
 from ..models import Confidence, DiscoverySource, Technology, WebItem, WebItemKind
@@ -188,7 +188,10 @@ def run(ctx, *args, **kwargs) -> dict:
     source_map = {a["host"]: db.get_asset_sources(ctx.conn, scan_id, a["host"]) for a in assets}
     live_hosts = {normalize_host(u) for u in live_urls if normalize_host(u)}
     for host, score in compute_source_confidence(source_map, live_hosts).items():
-        db.update_asset_confidence(ctx.conn, scan_id, host, score)
+        ctx.conn.execute(
+            "UPDATE assets SET confidence_score=? WHERE scan_id=? AND host=?",
+            (score, scan_id, host))
+    ctx.conn.commit()
 
     endpoints: List[str] = []
     if live_urls and ctx.allows("full"):
