@@ -171,7 +171,7 @@ async def _async_discover_single(domain: str, api_keys: dict) -> Dict[str, List[
     otx_key = api_keys.get("alienvault")
     shodan_key = api_keys.get("shodan")
     censys_key = api_keys.get("censys")
-    
+
     tasks = [
         run_cli_tool("subfinder", ["subfinder", "-d", domain, "-silent"], domain=domain),
         run_cli_tool("assetfinder", ["assetfinder", "--subs-only", domain], domain=domain),
@@ -189,50 +189,95 @@ async def _async_discover_single(domain: str, api_keys: dict) -> Dict[str, List[
     tool_outputs = {tool_name: subs for tool_name, subs in results}
     return merge_and_track(tool_outputs)
 
+
+# ---------------------------------------------------------------------------
+# Recursive discovery (fixed: bounded batch, no expansion of noisy names,
+# no recursion inside wildcard zones)
+# ---------------------------------------------------------------------------
+
+MAX_RECURSION_BATCH = 20          # hosts expanded per depth (was 100)
+MAX_DEPTH_HARD_LIMIT = 3          # never recurse deeper than this
+
+# Sources that also return unrelated/wildcard names. A name found ONLY by these
+# is not expanded: recursing on it multiplies tool runs for nothing.
+NOISY_SOURCES = frozenset({"subfinder", "assetfinder", "amass", "findomain"})
+
+_wildcard_cache: Dict[str, bool] = {}
+
+
+def _parent_of(host: str) -> str:
+    return host.split(".", 1)[1] if "." in host else host
+
+
+def _has_wildcard(parent: str) -> bool:
+    """True if random names under `parent` resolve, i.e. the zone has wildcard DNS."""
+    if parent in _wildcard_cache:
+        return _wildcard_cache[parent]
+    import random
+    import socket
+    import string
+    probe = "".join(random.choices(string.ascii_lowercase + string.digits, k=20))
+    try:
+        socket.gethostbyname(f"{probe}.{parent}")
+        result = True
+    except OSError:
+        result = False
+    _wildcard_cache[parent] = result
+    return result
+
+
 async def _async_discover_recursive(domain: str, api_keys: dict, max_depth: int) -> Dict[str, List[str]]:
-    master_results = {domain: ["manual"]}
-    targets_to_scan = {domain}
-    scanned_targets = set()
-    # Depth zero means perform discovery on the root target, but do not recurse.
-    effective_depth = max(1, max_depth)
-    
+    master_results: Dict[str, List[str]] = {domain: ["manual"]}
+    targets_to_scan: Set[str] = {domain}
+    scanned_targets: Set[str] = set()
+    effective_depth = min(max(1, max_depth), MAX_DEPTH_HARD_LIMIT)
+    if max_depth > MAX_DEPTH_HARD_LIMIT:
+        logger.warning(f"[-] Requested depth {max_depth} capped at {MAX_DEPTH_HARD_LIMIT}.")
+
     for depth in range(1, effective_depth + 1):
         if not targets_to_scan:
             break
-            
-        logger.info(f"[*] === Starting Discovery Depth {depth}/{max_depth} for {len(targets_to_scan)} target(s) ===")
-        
-        # حماية إضافية: لو عدد الأهداف تجاوز 100 في العمق التاني، نكتفي بهم لمنع الـ Explosion
-        if len(targets_to_scan) > 100:
-            dropped = len(targets_to_scan) - 100
-            logger.warning(f"[-] Target list exceeded 100 items at depth {depth}. Limiting recursion batch to first 100 sorted targets.")
+
+        logger.info(f"[*] === Discovery depth {depth}/{effective_depth}: {len(targets_to_scan)} target(s) ===")
+
+        if len(targets_to_scan) > MAX_RECURSION_BATCH:
+            dropped = len(targets_to_scan) - MAX_RECURSION_BATCH
+            logger.warning(f"[-] Depth {depth}: expanding only {MAX_RECURSION_BATCH} of "
+                           f"{len(targets_to_scan)} hosts ({dropped} not expanded).")
             # Not silent: those hosts are not expanded, so this scan is incomplete.
             toolstatus.record("recursion", "truncated", f"depth {depth}: {dropped} target(s) not expanded")
-            targets_to_scan = set(sorted(targets_to_scan)[:100])
+            targets_to_scan = set(sorted(targets_to_scan)[:MAX_RECURSION_BATCH])
 
         tasks = [_async_discover_single(t, api_keys) for t in sorted(targets_to_scan)]
         batch_results = await asyncio.gather(*tasks)
-        
         scanned_targets.update(targets_to_scan)
-        next_targets = set()
-        
+
+        next_targets: Set[str] = set()
         for result_dict in batch_results:
             for sub, sources in result_dict.items():
-                if sub not in master_results:
-                    master_results[sub] = []
+                master_results.setdefault(sub, [])
                 for src in sources:
                     if src not in master_results[sub]:
                         master_results[sub].append(src)
-                        
-                # اختيار النطاقات الحقيقية فقط للعمق اللي بعده (تجنب العشوائيات)
-                if sub not in scanned_targets and (sub == domain or sub.endswith("." + domain)):
-                    # نأخذ فقط الدومينات اللي مقطعها مش أكتر من 4 درجات (مثل a.b.c.example.com) لتجنب الـ Deep nesting الوهمي
-                    if sub.count('.') <= domain.count('.') + 3:
-                        next_targets.add(sub)
-                    
+
+                if sub in scanned_targets:
+                    continue
+                if not (sub == domain or sub.endswith("." + domain)):
+                    continue
+                if sub.count(".") > domain.count(".") + 3:
+                    continue
+                # Only names confirmed by a non-noisy source are worth expanding.
+                if set(sources) <= NOISY_SOURCES:
+                    continue
+                # Inside a wildcard zone every random label "exists": expanding them is pure noise.
+                if _has_wildcard(_parent_of(sub)):
+                    continue
+                next_targets.add(sub)
+
         targets_to_scan = next_targets
-        
+
     return master_results
+
 
 def discover_subdomains(domain: str, api_keys: dict = None, max_depth: int = 1, *args, **kwargs) -> Dict[str, List[str]]:
     if api_keys is None:
