@@ -34,9 +34,9 @@ from .errors import (
     TOOL_FAILED, TOOL_OK, TOOL_PARTIAL, TOOL_SKIPPED, ArchiveError,
     ToolOutcome, elapsed_ms, redact,
 )
-from .http_client import SafeHTTPClient
+from ..core.http_client import SafeHTTPClient
 from ..core.rate_limit import AsyncRateLimiter, backoff_delay
-from .scope_filter import ScopeEnforcer
+from ..core.scope_filter import ScopeEnforcer
 from .normalize import NormalizedURL, is_under_domain, url_host
 from .tools import ArchiveRecord, CrawlRecord, ToolResolver, run_gau
 
