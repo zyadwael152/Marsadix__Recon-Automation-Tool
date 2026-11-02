@@ -10,3 +10,4 @@ scope.txt
 *.db-wal
 *.db-shm
 *.db-journal
+outputs/
