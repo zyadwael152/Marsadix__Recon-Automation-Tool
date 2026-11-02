@@ -26,7 +26,7 @@ from urllib.parse import urljoin
 from .config import Member2Config
 from .errors import ScopeViolation, UnsafeTarget
 from .normalize import NormalizedURL, safe_url_for_log
-from .rate_limit import AsyncRateLimiter, backoff_delay
+from ..core.rate_limit import AsyncRateLimiter, backoff_delay
 from .scope_filter import ScopeEnforcer
 
 logger = logging.getLogger(__name__)

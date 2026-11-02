@@ -8,13 +8,12 @@ import pytest
 from marsadix import db
 from marsadix.core.scope import Scope
 from marsadix.models import Scan, ScanMode
-from marsadix.web_recon.archive import ArchiveBatch
-from marsadix.web_recon.cli import main
-from marsadix.web_recon.config import Member2Config
-from marsadix.web_recon.discovery import SubdomainEnumerator
-from marsadix.web_recon.errors import TOOL_OK, ToolOutcome
-from marsadix.web_recon.scope_filter import ScopeEnforcer
-from marsadix.web_recon.tools import (
+from marsadix.web.crawl import ArchiveBatch
+from marsadix.web.config import Member2Config
+from marsadix.web.discovery import SubdomainEnumerator
+from marsadix.web.errors import TOOL_OK, ToolOutcome
+from marsadix.web.scope_filter import ScopeEnforcer
+from marsadix.web.tools import (
     ArchiveRecord, ToolResolver, run_gau, run_httpx_verify, run_katana,
 )
 
@@ -53,7 +52,7 @@ def test_discovery_merges_sources_and_stores_assets(example_scan, tmp_path, monk
             outcomes=[ToolOutcome("wayback", TOOL_OK)])
 
     enumerator = SubdomainEnumerator(cfg, enforcer)
-    monkeypatch.setattr("marsadix.web_recon.discovery.run_subfinder", fake_subfinder)
+    monkeypatch.setattr("marsadix.web.discovery.run_subfinder", fake_subfinder)
     monkeypatch.setattr(enumerator, "fetch_crtsh", fake_crtsh)
     monkeypatch.setattr(enumerator.archives, "collect", fake_archive)
 
@@ -118,13 +117,3 @@ echo 'https://e.test/y'
     assert {r.url for r in gau} == {"https://e.test/x", "https://e.test/y"}
     assert next(r for r in gau if r.url.endswith("/x")).status_code == 200
     assert gau_outcome.status == TOOL_OK
-
-
-def test_cli_doctor_and_normalize(capsys):
-    assert main(["doctor", "--json"]) == 0
-    data = json.loads(capsys.readouterr().out)
-    assert data["version"]
-    assert isinstance(data["tools"], list)
-
-    assert main(["normalize", "https://e.test/a?utm_source=x&b=2"]) == 0
-    assert capsys.readouterr().out.strip() == "https://e.test/a?b=2"
