@@ -177,10 +177,13 @@ def _parse_targets(targets: Iterable[str], enforcer: ScopeEnforcer,
             normalized = enforcer.check(value)
         except Exception:
             continue
-        # One scan per origin; Nuclei templates normally match at host level.
-        if normalized.origin in selected:
+        # Preserve distinct paths: Web discovery is useful to ASM only if
+        # endpoint URLs survive the handoff. Nuclei accepts full URLs as
+        # targets, and many templates (especially DAST-style checks) need them.
+        # The normalized URL is also the stable deduplication key.
+        if normalized.key in selected:
             continue
-        selected[normalized.origin] = normalized.host
+        selected[normalized.key] = normalized.url
     return list(selected)
 
 
