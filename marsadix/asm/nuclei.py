@@ -26,10 +26,14 @@ from marsadix.models import (
 from marsadix.owasp import get_owasp_category
 from marsadix.skills import get_skill
 
-from .config import Member2Config
-from .errors import TOOL_FAILED, TOOL_MISSING, TOOL_SKIPPED, ToolOutcome, elapsed_ms
-from .scope_filter import ScopeEnforcer
-from .tools import ToolResolver, run_tool
+# Shared, hardened process/config/scope primitives are reused from the web-surface
+# package.  The Nuclei engine itself is owned and invoked exclusively by ASM.
+from ..web_recon.config import Member2Config
+from ..web_recon.errors import (
+    TOOL_FAILED, TOOL_MISSING, TOOL_SKIPPED, ToolOutcome, elapsed_ms,
+)
+from ..web_recon.scope_filter import ScopeEnforcer
+from ..web_recon.tools import ToolResolver, run_tool
 
 logger = logging.getLogger(__name__)
 

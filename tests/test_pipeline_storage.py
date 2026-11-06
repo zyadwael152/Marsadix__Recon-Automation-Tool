@@ -124,4 +124,3 @@ def test_mode_override_keeps_existing_active_scan_passive(
     assert rows[0]["url"] == local_server
     assert rows[0]["status_code"] is None
     assert any("security inspection skipped" in note for note in report.skipped)
-    assert any("nuclei skipped" in note for note in report.skipped)

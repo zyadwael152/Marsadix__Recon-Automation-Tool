@@ -24,7 +24,6 @@ from .errors import (
 )
 from .http_client import SafeHTTPClient
 from .js_extract import JsHarvester
-from .nuclei import NucleiBatch, run_nuclei
 from .normalize import classify_kind, is_under_domain
 from .rate_limit import AsyncRateLimiter
 from .scope_filter import ScopeEnforcer
@@ -60,7 +59,6 @@ class WebPipelineReport:
     duration_ms: int = 0
     checked: int = 0
     findings_stored: int = 0
-    nuclei_findings: int = 0
     security_findings: int = 0
     waf: dict = field(default_factory=dict)
 
@@ -83,7 +81,6 @@ class WebPipelineReport:
             "archive_records": self.archive_records,
             "checked": self.checked,
             "findings_stored": self.findings_stored,
-            "nuclei_findings": self.nuclei_findings,
             "security_findings": self.security_findings,
             "waf": dict(self.waf),
             "duration_ms": self.duration_ms,
@@ -397,7 +394,6 @@ async def _run_async(
             security_urls = []
 
     security_findings = list(secret_findings)
-    nuclei_findings = []
     if active_allowed:
         scanner = SecurityScanner(enforcer, config, client)
         security_batch = SecurityBatch()
@@ -414,19 +410,10 @@ async def _run_async(
         report.waf = dict(security_batch.waf)
         report.outcomes.extend(security_batch.outcomes)
 
-        if config.nuclei_enabled:
-            nuclei_batch: NucleiBatch = await run_nuclei(
-                security_urls, scan_id, target, config, resolver, enforcer)
-            if nuclei_batch.outcome is not None:
-                report.outcomes.append(nuclei_batch.outcome)
-            nuclei_findings = list(nuclei_batch.findings)
     else:
         if config.security_headers or config.tls_check:
             report.skipped.append("security inspection skipped: passive mode")
-        if config.nuclei_enabled:
-            report.skipped.append("nuclei skipped: passive mode")
     report.security_findings = len(security_findings)
-    report.nuclei_findings = len(nuclei_findings)
 
     if dry_run:
         report.status = "dry-run"
@@ -438,7 +425,7 @@ async def _run_async(
     report.counts = storage.by_kind
 
     unique_findings = {}
-    for finding in security_findings + nuclei_findings:
+    for finding in security_findings:
         unique_findings[finding.dedup_key] = finding
     findings = list(unique_findings.values())
     if findings:

@@ -120,7 +120,7 @@ def _print_report(report, as_json: bool) -> None:
     print(f"  checked         {report.checked}")
     print(f"  new assets      {report.assets_stored}")
     print(f"  findings        {report.findings_stored} stored"
-          f" (nuclei={report.nuclei_findings}, security={report.security_findings})")
+          f" (security={report.security_findings})")
     if report.counts:
         print("  kinds           " + ", ".join(f"{k}={v}" for k, v in sorted(report.counts.items())))
     if report.source_counts:
