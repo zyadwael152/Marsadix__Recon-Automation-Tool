@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 
 from .. import db
 from ..core import netguard
-from ..core.confidence import compute_source_confidence
+from ..recon.confidence import compute_source_confidence
 from ..core.scope import normalize_host
 from ..core.textfile import safe_filename
 from ..models import Confidence, DiscoverySource, Technology, WebItem, WebItemKind
