@@ -135,7 +135,12 @@ def test_no_in_scope_hosts_means_no_tool_runs(conn, tmp_path, calls):
     out = web_stage.run(ctx)
 
     assert calls["httpx"] == [] and calls["katana"] == []
-    assert out == {"live_urls": [], "endpoints": []}
+    assert out["live_urls"] == []
+    assert out["endpoints"] == []
+    assert out["skipped"] == "no in-scope hosts to probe"
+    assert out["stored"] == 0
+    assert out["technologies"] == 0
+  
 
 
 # ------------------------------------------------------------------- output dir
