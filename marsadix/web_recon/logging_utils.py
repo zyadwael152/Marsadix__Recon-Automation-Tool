@@ -40,8 +40,31 @@ def configure_logging(verbose: bool = False, log_file: Optional[str] = None,
     logger = logging.getLogger("marsadix.web_recon")
     logger.setLevel(level)
 
-    if not force and (logger.handlers or logging.getLogger().handlers):
+    root = logging.getLogger()
+    if root.handlers:
+        # When embedded in a host app (or pytest), use the host's handlers.
+        # Drop any local handlers installed by this module so they cannot
+        # retain a closed capture stream.
+        for handler in tuple(logger.handlers):
+            logger.removeHandler(handler)
+            try:
+                handler.close()
+            except Exception:
+                pass
+        logger.propagate = True
         return logger
+    if not force and logger.handlers:
+        return logger
+
+    if force:
+        # Replace our own handlers instead of stacking StreamHandlers on each
+        # CLI invocation.
+        for handler in tuple(logger.handlers):
+            logger.removeHandler(handler)
+            try:
+                handler.close()
+            except Exception:
+                pass
 
     fmt = logging.Formatter(
         "%(asctime)s %(levelname)-7s %(name)s: %(message)s",

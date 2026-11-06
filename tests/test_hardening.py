@@ -102,11 +102,19 @@ def test_output_limit_stops_the_tool_and_marks_truncated():
     assert res.truncated and len(res.stdout) <= 100_000
 
 
-def test_run_async_returns_partial_output_on_timeout_and_records_it():
+def test_run_async_returns_partial_output_on_timeout_and_records_it(monkeypatch):
+    from marsadix.core.aproc import ExecResult
+
     toolstatus.reset()
     limits.configure()
-    code = "import sys,time;print('a.example.com',flush=True);time.sleep(60)"
-    out = asyncio.run(_proc.run_async([sys.executable, "-c", code], timeout=1, name="fake"))
+
+    async def fake_run_exec(*args, **kwargs):
+        return ExecResult(
+            stdout=b"a.example.com\n", stderr=b"", returncode=-9, timed_out=True
+        )
+
+    monkeypatch.setattr(_proc, "run_exec", fake_run_exec)
+    out = asyncio.run(_proc.run_async([sys.executable, "-c", "pass"], timeout=3, name="fake"))
     assert "a.example.com" in out
     assert [(r.tool, r.status) for r in toolstatus.degraded()] == [("fake", "timeout")]
 
