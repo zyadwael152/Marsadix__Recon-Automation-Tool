@@ -8,10 +8,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import replace
 
 from marsadix import db
-from marsadix.web_recon.config import load_member2_config
+from .config import ASMConfig
 from marsadix.web_recon.scope_filter import ScopeEnforcer
 from marsadix.web_recon.tools import ToolResolver
 
@@ -39,19 +38,12 @@ def run(ctx) -> dict:
     if not ctx.allows("standard"):
         return {"skipped": "ASM active checks require standard or full mode"}
 
-    # Reuse Member 2's validated tool settings so existing Nuclei binary,
-    # timeout, rate, tag and severity configuration remains effective.
-    cfg = load_member2_config()
-    cfg = replace(
-        cfg,
-        db_path=getattr(ctx.config, "db_path", cfg.db_path),
-        output_dir=getattr(ctx.config, "output_dir", cfg.output_dir),
-        rate_limit=max(1, int(getattr(ctx.config, "rate_limit", cfg.rate_limit))),
-        tool_timeout=max(1, int(getattr(ctx.config, "tool_timeout", cfg.tool_timeout))),
-        nuclei_enabled=True,
-        write_outputs=False,
-    )
-    cfg.validate()
+    # ASM owns its Nuclei configuration; shared runtime limits are inherited
+    # from the main application config, never from Web Recon.
+    cfg = ASMConfig.from_runtime(ctx.config)
+    if not cfg.nuclei_enabled:
+        return {"asm": {"engine": "nuclei", "status": "skipped",
+                        "reason": "disabled by MARSADIX_ASM_NUCLEI_ENABLED"}}
 
     targets = _targets(ctx)
     if not targets:

@@ -28,7 +28,7 @@ from marsadix.skills import get_skill
 
 # Shared, hardened process/config/scope primitives are reused from the web-surface
 # package.  The Nuclei engine itself is owned and invoked exclusively by ASM.
-from ..web_recon.config import Member2Config
+from .config import ASMConfig
 from ..web_recon.errors import (
     TOOL_FAILED, TOOL_MISSING, TOOL_SKIPPED, ToolOutcome, elapsed_ms,
 )
@@ -185,7 +185,7 @@ def _parse_targets(targets: Iterable[str], enforcer: ScopeEnforcer,
 
 
 async def run_nuclei(targets: Iterable[str], scan_id: int, target: str,
-                     config: Member2Config, resolver: ToolResolver,
+                     config: ASMConfig, resolver: ToolResolver,
                      enforcer: ScopeEnforcer) -> NucleiBatch:
     """Run one bounded A1-A4 Nuclei pass over in-scope origins."""
     batch = NucleiBatch()
@@ -228,6 +228,17 @@ async def run_nuclei(targets: Iterable[str], scan_id: int, target: str,
     ]
     if config.nuclei_severities:
         argv.extend(["-severity", ",".join(config.nuclei_severities)])
+    # Potentially high-impact template engines stay explicitly opt-in.
+    if getattr(config, "nuclei_code", False):
+        argv.append("-code")
+    if getattr(config, "nuclei_file", False):
+        argv.append("-file")
+    if getattr(config, "nuclei_self_contained", False):
+        argv.append("-enable-self-contained")
+    if getattr(config, "nuclei_dast", False):
+        argv.append("-dast")
+    if getattr(config, "nuclei_headless", False):
+        argv.append("-headless")
 
     start = time.monotonic()
     execution = await run_tool(
@@ -265,6 +276,9 @@ async def run_nuclei(targets: Iterable[str], scan_id: int, target: str,
                  "tags": list(config.nuclei_tags),
                  "severities": list(config.nuclei_severities),
                  "rate_limit": rate, "request_timeout": request_timeout,
-                 "timeout": config.nuclei_timeout},
+                 "timeout": config.nuclei_timeout,
+                 "engines": {"code": getattr(config, "nuclei_code", False), "file": getattr(config, "nuclei_file", False),
+                             "self_contained": getattr(config, "nuclei_self_contained", False),
+                             "dast": getattr(config, "nuclei_dast", False), "headless": getattr(config, "nuclei_headless", False)}},
     )
     return batch
