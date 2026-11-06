@@ -424,6 +424,21 @@ def get_asset_confidence(conn, scan_id: int, host: str) -> dict:
     sources = get_asset_sources(conn, scan_id, host)
     return {"sources": sources, "count": len(sources)}
 
+def update_asset_confidence(conn, scan_id: int, host: str, score: int) -> None:
+    """Persist the computed R4 confidence score for one asset in this scan.
+
+    Scores are bounded to the documented 0-100 range.
+    Updating only the matching scan/host prevents confidence
+    from leaking between scans.
+    """
+    bounded = max(0, min(100, int(score)))
+
+    conn.execute(
+        "UPDATE assets SET confidence_score=? WHERE scan_id=? AND host=?",
+        (bounded, scan_id, host),
+    )
+    conn.commit()
+
 
 def get_source_coverage(conn, scan_id: int) -> dict:
     """
