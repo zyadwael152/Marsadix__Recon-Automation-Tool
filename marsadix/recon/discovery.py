@@ -266,9 +266,10 @@ async def _async_discover_recursive(domain: str, api_keys: dict, max_depth: int)
                     continue
                 if sub.count(".") > domain.count(".") + 3:
                     continue
-                # Only names confirmed by a non-noisy source are worth expanding.
-                if set(sources) <= NOISY_SOURCES:
-                    continue
+                               # Expand in-scope names even when first reported by a noisy
+                # enumerator. Recursion is already bounded by depth/batch and
+                # wildcard-zone checks; source-based suppression hid valid
+                # subdomains such as api.example.com reported by subfinder.
                 # Inside a wildcard zone every random label "exists": expanding them is pure noise.
                 if _has_wildcard(_parent_of(sub)):
                     continue
