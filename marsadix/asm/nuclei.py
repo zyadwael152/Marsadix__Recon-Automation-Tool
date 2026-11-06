@@ -29,11 +29,11 @@ from marsadix.skills import get_skill
 # Shared, hardened process/config/scope primitives are reused from the web-surface
 # package.  The Nuclei engine itself is owned and invoked exclusively by ASM.
 from .config import ASMConfig
-from ..web_recon.errors import (
+from .errors import (
     TOOL_FAILED, TOOL_MISSING, TOOL_SKIPPED, ToolOutcome, elapsed_ms,
 )
-from ..web_recon.scope_filter import ScopeEnforcer
-from ..web_recon.tools import ToolResolver, run_tool
+from .scope import ScopeEnforcer
+from .runtime import ToolResolver, run_tool
 
 logger = logging.getLogger(__name__)
 

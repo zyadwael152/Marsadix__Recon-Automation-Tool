@@ -11,8 +11,8 @@ import logging
 
 from marsadix import db
 from .config import ASMConfig
-from marsadix.web_recon.scope_filter import ScopeEnforcer
-from marsadix.web_recon.tools import ToolResolver
+from .scope import ScopeEnforcer
+from .runtime import ToolResolver
 
 from .nuclei import run_nuclei
 
