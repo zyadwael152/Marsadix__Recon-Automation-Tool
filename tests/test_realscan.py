@@ -36,38 +36,15 @@ def _capture(monkeypatch, responses):
 
 
 # ------------------------------------------------------------------ providers
-def test_shodan_sends_the_key_in_the_parameter_shodan_actually_reads(monkeypatch):
-    seen = _capture(monkeypatch, [{"matches": [{"hostnames": ["a.example.com"]}], "total": 1}])
-    _, subs = asyncio.run(api_sources.fetch_shodan("example.com", "KEY123"))
-    assert subs == {"a.example.com"}
-    assert "key=KEY123" in seen[0][0] and "SHODAN-API-KEY" not in seen[0][0]
-
-
-def test_censys_sends_no_request_because_its_legacy_api_is_gone(monkeypatch, caplog):
-    toolstatus.reset()
-    monkeypatch.setattr(api_sources, "_censys_noted", False)
-    seen = _capture(monkeypatch, [])
-    with caplog.at_level("WARNING"):
-        assert asyncio.run(api_sources.fetch_censys("example.com", "id:secret")) == ("censys", set())
-        asyncio.run(api_sources.fetch_censys("example.com", "id:secret"))
-    assert seen == []                                               # nothing was sent
-    assert caplog.text.count("decommissioned") == 1 and "secret" not in caplog.text    # said once, no key
-    assert [(r.tool, r.status) for r in toolstatus.runs()] == [("censys", "denied")] * 2
-    assert toolstatus.degraded() == []                              # a setup fact, not an incomplete scan
-    toolstatus.reset()
-    assert asyncio.run(api_sources.fetch_censys("example.com", None)) == ("censys", set())
-    assert toolstatus.runs() == []                                  # no key: nothing to report
-
-
 @pytest.mark.parametrize("code,status,degrades", [(401, "denied", False), (403, "denied", False),
                                                   (402, "denied", False), (429, "failed", True), (502, "failed", True)])
 def test_http_errors_are_explained_and_only_transient_ones_make_a_scan_incomplete(monkeypatch, caplog, code, status, degrades):
     toolstatus.reset()
     _capture(monkeypatch, [_http_error(code)])
     with caplog.at_level("WARNING"):
-        asyncio.run(api_sources.fetch_shodan("example.com", "SECRETKEY"))
+        asyncio.run(api_sources.fetch_virustotal("example.com", "SECRETKEY"))
     assert f"HTTP {code}" in caplog.text and "SECRETKEY" not in caplog.text
-    assert [(r.tool, r.status) for r in toolstatus.runs()] == [("shodan", status)]
+    assert [(r.tool, r.status) for r in toolstatus.runs()] == [("virustotal", status)]
     assert bool(toolstatus.degraded()) is degrades
 
 
@@ -97,12 +74,12 @@ def test_alienvault_gives_up_after_one_retry(monkeypatch):
 
 
 def test_requests_to_one_provider_are_spaced_out(monkeypatch):
-    monkeypatch.setattr(api_sources, "PROVIDER_GAP", {"shodan": 0.15})
+    monkeypatch.setattr(api_sources, "PROVIDER_GAP", {"virustotal": 0.15})
     stamps = []
 
     async def go():
         async def one():
-            await api_sources._throttle("shodan")
+            await api_sources._throttle("virustotal")
             stamps.append(time.monotonic())
         await asyncio.gather(*[one() for _ in range(3)])
     asyncio.run(go())
@@ -310,26 +287,17 @@ def test_doctor_explains_that_wsl_tools_are_invisible_to_windows(monkeypatch, ca
     assert "WSL" not in capsys.readouterr().out
 
 
-# ------------------------------------------------ provider message + doctor key list
-def test_the_providers_own_explanation_is_logged_without_any_key(monkeypatch, caplog):
-    toolstatus.reset()
-    body = b'{"error": "Requires membership or higher to access"}'
-    _capture(monkeypatch, [urllib.error.HTTPError("https://x", 403, "Forbidden", {}, io.BytesIO(body))])
-    with caplog.at_level("WARNING"):
-        asyncio.run(api_sources.fetch_shodan("example.com", "SECRETKEY"))
-    assert "HTTP 403" in caplog.text and "Provider says: Requires membership or higher to access" in caplog.text
-    assert "SECRETKEY" not in caplog.text
-
-
+# ------------------------------------------------ doctor key list
 def test_doctor_lists_which_source_keys_are_loaded_but_never_their_values(monkeypatch, capsys):
     from marsadix import cli
     monkeypatch.setattr(cli, "tool_status", lambda: [("subfinder", "/x/subfinder", "passive")])
     monkeypatch.setattr(cli, "httpx_check", lambda: (None, ""))
-    cli.cmd_doctor(None, Config(otx_api_key="otx-secret-value", shodan_api_key="shodan-secret-value"))
+    cli.cmd_doctor(None, Config(otx_api_key="otx-secret-value", virustotal_api_key="vt-secret-value"))
     out = capsys.readouterr().out
-    assert "[KEY SET] AlienVault OTX" in out and "[KEY SET] Shodan" in out
-    assert "[no key ] VirusTotal" in out and "[no key ] Censys" in out
-    assert "otx-secret-value" not in out and "shodan-secret-value" not in out
+    assert "[KEY SET] AlienVault OTX" in out
+    assert "[KEY SET] VirusTotal" in out
+    assert "Shodan" not in out and "Censys" not in out
+    assert "otx-secret-value" not in out and "vt-secret-value" not in out
 
 
 def test_alienvault_key_is_sent_in_the_header_otx_actually_reads(monkeypatch):

@@ -161,8 +161,6 @@ nano .env
 | المفتاح | إجباري؟ | منين |
 | --- | --- | --- |
 | `NVD_API_KEY` | موصى به | `nvd.nist.gov/developers/request-an-api-key` (مجاني، بيوصل بالإيميل) |
-| `SHODAN_API_KEY` | اختياري | حساب مجاني على `shodan.io` |
-| `CENSYS_API_KEY` | اختياري | حساب مجاني على `censys.io` |
 | `VIRUSTOTAL_API_KEY` | اختياري | حساب مجاني على `virustotal.com` |
 | `OTX_API_KEY` | اختياري | حساب مجاني على `otx.alienvault.com` |
 | `CHAOS_API_KEY` | اختياري | التسجيل على `chaos.projectdiscovery.io` |

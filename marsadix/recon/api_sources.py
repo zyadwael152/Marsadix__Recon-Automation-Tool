@@ -24,13 +24,10 @@ logger = logging.getLogger(__name__)
 HTTP_TIMEOUT = 15  # seconds
 MAX_API_PAGES = 5  # bound API usage and memory on very large domains
 PAGE_SIZE = 50
-SHODAN_PAGE_SIZE = 100
 
 
-# Minimum seconds between two requests to the same provider. Recursive discovery asks every
-# provider once per sub-target at the same time; free tiers (VirusTotal 4/min, Shodan 1/s,
-# OTX anonymous) answer that burst with HTTP 429. Empty dict = no spacing (tests).
-PROVIDER_GAP = {"alienvault": 2.0, "virustotal": 1.0, "shodan": 1.1}
+# Minimum seconds between requests to the same provider. Empty dict = no spacing (tests).
+PROVIDER_GAP = {"alienvault": 2.0, "virustotal": 1.0}
 _gates: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
 
 
@@ -215,73 +212,3 @@ async def fetch_alienvault(domain: str, api_key: str = None) -> Tuple[str, Set[s
     return "alienvault", subdomains
 
 
-async def fetch_shodan(domain: str, api_key: str = None) -> Tuple[str, Set[str]]:
-    """Query Shodan host search with bounded page traversal.
-
-    Shodan's documented endpoint requires the API key in the query string. The
-    URL is never logged; errors are logged by exception type only. Local process
-    or HTTP instrumentation may still observe the URL, so treat this as a
-    provider-specific credential-handling limitation.
-    """
-    subdomains: Set[str] = set()
-    if not api_key:
-        logger.info("[-] Skipped Shodan (No API Key provided).")
-        return "shodan", subdomains
-
-    domain = _root_domain(domain)
-    logger.info("[*] Querying Shodan...")
-    try:
-        for page in range(1, MAX_API_PAGES + 1):
-            # the parameter is `key` (it used to be sent as "SHODAN-API-KEY", which Shodan ignores, so
-            # EVERY request was rejected as unauthenticated)
-            query = urllib.parse.urlencode({"key": api_key, "query": f"hostname:{domain}", "page": page})
-            url = f"https://api.shodan.io/shodan/host/search?{query}"
-            await _throttle("shodan")
-            data = await _request_json_async(url)
-            matches = data.get("matches")
-            matches = matches if isinstance(matches, list) else []
-            for match in matches:
-                if not isinstance(match, dict):
-                    continue
-                hostnames = match.get("hostnames")
-                for host in hostnames if isinstance(hostnames, list) else []:
-                    if isinstance(host, str) and _under_domain(host, domain):
-                        subdomains.add(host.strip().lower().rstrip("."))
-            try:
-                total = int(data.get("total", 0) or 0)
-            except (TypeError, ValueError):
-                total = 0
-            if not matches or page * SHODAN_PAGE_SIZE >= total:
-                break
-        logger.info("[+] Shodan discovered %d subdomains (up to %d pages).", len(subdomains), MAX_API_PAGES)
-    except urllib.error.HTTPError as e:
-        _on_http_error("shodan", "Shodan", e)
-    except Exception as e:
-        logger.warning("[-] Shodan request failed (%s); API key redacted.", type(e).__name__)
-        toolstatus.record("shodan", "failed", type(e).__name__)
-    return "shodan", subdomains
-
-
-_CENSYS_NOTE = ("Censys is skipped: the Legacy Search API (search.censys.io/api/v2) was decommissioned on "
-                "2026-09-30. The replacement Platform API (api.platform.censys.io, CenQL queries) needs a Personal "
-                "Access Token and an organization (Starter tier or higher, per Censys / DefectDojo documentation) "
-                "and is not implemented in Marsadix yet.")
-_censys_noted = False
-
-
-async def fetch_censys(domain: str, api_key: str = None) -> Tuple[str, Set[str]]:
-    """
-    Placeholder: the Censys endpoint this used to call no longer exists, so no request is sent.
-
-    Sending it anyway only produced HTTP 403 "decommissioned" on every scan. When a key is set the
-    reason is logged once per run and recorded as "denied" (a setup fact, not an incomplete scan).
-    """
-    global _censys_noted
-    if not api_key:
-        logger.info("[-] Skipped Censys (No API Key provided).")
-        return "censys", set()
-    if not _censys_noted:
-        _censys_noted = True
-        logger.warning("[-] %s", _CENSYS_NOTE)
-    toolstatus.record("censys", "denied", "legacy API decommissioned; Platform API not implemented")
-    return "censys", set()

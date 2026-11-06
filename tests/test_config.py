@@ -5,7 +5,7 @@ import pytest
 
 from marsadix.core.config import ENV_MAP, Config, ConfigError, load_config, load_dotenv
 
-KNOWN = ["SHODAN_API_KEY", "VIRUSTOTAL_API_KEY", "MARSADIX_DNS_RATE_LIMIT", "MARSADIX_MAX_PERMUTATIONS",
+KNOWN = ["VIRUSTOTAL_API_KEY", "VIRUSTOTAL_API_KEY", "MARSADIX_DNS_RATE_LIMIT", "MARSADIX_MAX_PERMUTATIONS",
          "MARSADIX_BRUTEFORCE_WORDLIST", "MARSADIX_RESOLVERS_FILE", "MARSADIX_DB"]
 DANGEROUS = ["LD_PRELOAD", "HTTPS_PROXY", "PYTHONSTARTUP", "PATH_EVIL", "SSL_CERT_FILE"]
 
@@ -19,9 +19,9 @@ def clean_env(tmp_path, monkeypatch):
 
 def test_dotenv_only_reads_marsadixs_own_settings():
     open(".env", "w").write("LD_PRELOAD=/tmp/evil.so\nHTTPS_PROXY=http://attacker:8080\nPYTHONSTARTUP=/tmp/x.py\n"
-                            "SHODAN_API_KEY=abc\n")
+                            "VIRUSTOTAL_API_KEY=abc\n")
     cfg = load_config(None)
-    assert cfg.shodan_api_key == "abc"
+    assert cfg.virustotal_api_key == "abc"
     for k in DANGEROUS:
         assert k not in os.environ, f"{k} leaked into the environment inherited by every scan tool"
 
@@ -34,28 +34,28 @@ def test_dotenv_names_ignored_variables_but_never_prints_their_values(caplog):
 
 
 def test_real_environment_variables_win_over_the_dotenv_file(monkeypatch):
-    monkeypatch.setenv("SHODAN_API_KEY", "from-real-env")
-    open(".env", "w").write("SHODAN_API_KEY=from-file\n")
-    assert load_config(None).shodan_api_key == "from-real-env"
+    monkeypatch.setenv("VIRUSTOTAL_API_KEY", "from-real-env")
+    open(".env", "w").write("VIRUSTOTAL_API_KEY=from-file\n")
+    assert load_config(None).virustotal_api_key == "from-real-env"
 
 
 def test_dotenv_accepts_export_prefix_quotes_and_crlf():
-    open(".env", "wb").write(b'export SHODAN_API_KEY="abc123"\r\nVIRUSTOTAL_API_KEY=\'vt456\'\r\n')
+    open(".env", "wb").write(b'export VIRUSTOTAL_API_KEY="abc123"\r\nOTX_API_KEY=\'otx456\'\r\n')
     cfg = load_config(None)
-    assert (cfg.shodan_api_key, cfg.virustotal_api_key) == ("abc123", "vt456")
+    assert (cfg.virustotal_api_key, cfg.otx_api_key) == ("abc123", "otx456")
 
 
 @pytest.mark.parametrize("label,data", [
-    ("utf-8 BOM", b"\xef\xbb\xbf" + b"SHODAN_API_KEY=abc\r\n"),
-    ("utf-16 (PowerShell redirect)", "SHODAN_API_KEY=abc\r\n".encode("utf-16")),
+    ("utf-8 BOM", b"\xef\xbb\xbf" + b"VIRUSTOTAL_API_KEY=abc\r\n"),
+    ("utf-16 (PowerShell redirect)", "VIRUSTOTAL_API_KEY=abc\r\n".encode("utf-16")),
 ])
 def test_dotenv_written_by_windows_tools_is_readable(label, data):
     open(".env", "wb").write(data)
-    assert load_config(None).shodan_api_key == "abc", label
+    assert load_config(None).virustotal_api_key == "abc", label
 
 
 def test_an_undecodable_dotenv_is_a_clear_config_error_not_a_traceback():
-    open(".env", "wb").write(b"SHODAN_API_KEY=\xff\xfe\xfa broken")
+    open(".env", "wb").write(b"VIRUSTOTAL_API_KEY=\xff\xfe\xfa broken")
     with pytest.raises(ConfigError, match="cannot read .env"):
         load_config(None)
 
@@ -111,15 +111,18 @@ def test_securitytrails_was_fully_removed_from_the_config_surface(monkeypatch):
     assert "SECURITYTRAILS_API_KEY" not in ENV_MAP
     assert not hasattr(cfg, "securitytrails_api_key")
     # The active recon keys are still present and load normally.
-    assert ENV_MAP["SHODAN_API_KEY"] == "shodan_api_key"
-    assert ENV_MAP["CENSYS_API_KEY"] == "censys_api_key"
+    assert "SHODAN_API_KEY" not in ENV_MAP
+    assert "CENSYS_API_KEY" not in ENV_MAP
+    assert not hasattr(cfg, "shodan_api_key")
+    assert not hasattr(cfg, "censys_api_key")
+    assert ENV_MAP["VIRUSTOTAL_API_KEY"] == "virustotal_api_key"
     assert ENV_MAP["VIRUSTOTAL_API_KEY"] == "virustotal_api_key"
 
 
 def test_a_secret_in_config_toml_triggers_a_warning_that_never_shows_the_secret(caplog):
     pytest.importorskip("tomllib")
-    open("config.toml", "w").write('shodan_api_key = "TOPSECRETVALUE"\n')
+    open("config.toml", "w").write('virustotal_api_key = "TOPSECRETVALUE"\n')
     with caplog.at_level(logging.WARNING):
         cfg = load_config(None)
-    assert cfg.shodan_api_key == "TOPSECRETVALUE"                      # still honoured...
-    assert "shodan_api_key" in caplog.text and "TOPSECRETVALUE" not in caplog.text   # ...but flagged
+    assert cfg.virustotal_api_key == "TOPSECRETVALUE"                      # still honoured...
+    assert "virustotal_api_key" in caplog.text and "TOPSECRETVALUE" not in caplog.text   # ...but flagged

@@ -281,7 +281,6 @@ def cmd_doctor(a, cfg: Config) -> int:
     # Which recon data sources have a key loaded (names only, never values), so "I put the key in"
     # can be checked instead of guessed.
     sources = [("VirusTotal", cfg.virustotal_api_key, "VIRUSTOTAL_API_KEY"), ("AlienVault OTX", cfg.otx_api_key, "OTX_API_KEY"),
-               ("Shodan", cfg.shodan_api_key, "SHODAN_API_KEY"), ("Censys (unused: legacy API shut down)", cfg.censys_api_key, "CENSYS_API_KEY"),
                ("Chaos", cfg.chaos_api_key, "CHAOS_API_KEY")]
     print("\nRecon data sources (key loaded from .env / environment):")
     for name, key, var in sources:

@@ -32,11 +32,11 @@ def conn():
 
 # ------------------------------------------------------------------ secrets
 def test_child_env_never_contains_marsadix_secrets_or_unrelated_shell_secrets(monkeypatch):
-    for k in ("SHODAN_API_KEY", "VIRUSTOTAL_API_KEY", "NVD_API_KEY", "DISCORD_WEBHOOK_URL",
+    for k in ("VIRUSTOTAL_API_KEY", "VIRUSTOTAL_API_KEY", "NVD_API_KEY", "DISCORD_WEBHOOK_URL",
               "TELEGRAM_BOT_TOKEN", "AWS_SECRET_ACCESS_KEY", "GITHUB_TOKEN"):
         monkeypatch.setenv(k, "s3cret")
     env = childenv.child_env()
-    assert not set(env) & {"SHODAN_API_KEY", "VIRUSTOTAL_API_KEY", "NVD_API_KEY",
+    assert not set(env) & {"VIRUSTOTAL_API_KEY", "VIRUSTOTAL_API_KEY", "NVD_API_KEY",
                            "DISCORD_WEBHOOK_URL", "TELEGRAM_BOT_TOKEN",
                            "AWS_SECRET_ACCESS_KEY", "GITHUB_TOKEN"}
     assert "PATH" in env                              # tools must still be found
@@ -49,15 +49,15 @@ def test_child_env_passes_only_the_explicit_extra_key():
 
 def test_dotenv_keys_stay_in_config_and_do_not_enter_os_environ(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("SHODAN_API_KEY", raising=False)
-    open(".env", "w").write("SHODAN_API_KEY=abc\n")
-    assert load_config(None).shodan_api_key == "abc"
-    assert "SHODAN_API_KEY" not in os.environ        # so no child process can inherit it
+    monkeypatch.delenv("VIRUSTOTAL_API_KEY", raising=False)
+    open(".env", "w").write("VIRUSTOTAL_API_KEY=abc\n")
+    assert load_config(None).virustotal_api_key == "abc"
+    assert "VIRUSTOTAL_API_KEY" not in os.environ        # so no child process can inherit it
 
 
 def test_a_real_child_process_does_not_receive_api_keys(monkeypatch):
-    monkeypatch.setenv("SHODAN_API_KEY", "s3cret")
-    code = "import os,sys;sys.stdout.write(os.environ.get('SHODAN_API_KEY','-')+'|'+os.environ.get('X_EXTRA','-'))"
+    monkeypatch.setenv("VIRUSTOTAL_API_KEY", "s3cret")
+    code = "import os,sys;sys.stdout.write(os.environ.get('VIRUSTOTAL_API_KEY','-')+'|'+os.environ.get('X_EXTRA','-'))"
     res = asyncio.run(run_exec([sys.executable, "-c", code], timeout=20, env_extra={"X_EXTRA": "1"}))
     assert res.stdout.decode() == "-|1"
 
@@ -283,21 +283,21 @@ def test_katana_is_limited_to_each_seed_host(monkeypatch):
         return Proc()
 
     monkeypatch.setattr(probe.asyncio, "create_subprocess_exec", fake_exec)
-    monkeypatch.setenv("SHODAN_API_KEY", "s3cret")
+    monkeypatch.setenv("VIRUSTOTAL_API_KEY", "s3cret")
     asyncio.run(probe.run_katana(["https://a.example.com"], 5))
     argv = seen["argv"]
     assert argv[argv.index("-fs") + 1] == "fqdn"
-    assert "SHODAN_API_KEY" not in seen["env"]
+    assert "VIRUSTOTAL_API_KEY" not in seen["env"]
 
 
 # ------------------------------------------------- keys must not live in .env.example
 def test_real_keys_in_env_example_trigger_a_warning_without_printing_them(tmp_path, monkeypatch, caplog):
     from marsadix.core.config import warn_if_secrets_in_example
     monkeypatch.chdir(tmp_path)
-    (tmp_path / ".env.example").write_text("SHODAN_API_KEY=sup3rs3cretvalue\nVIRUSTOTAL_API_KEY=\n# note\nMARSADIX_RATE_LIMIT=20\n")
+    (tmp_path / ".env.example").write_text("OTX_API_KEY=sup3rs3cretvalue\nVIRUSTOTAL_API_KEY=\n# note\nMARSADIX_RATE_LIMIT=20\n")
     with caplog.at_level("WARNING"):
-        assert warn_if_secrets_in_example() == ["SHODAN_API_KEY"]
-    assert "SHODAN_API_KEY" in caplog.text and "sup3rs3cretvalue" not in caplog.text
+        assert warn_if_secrets_in_example() == ["OTX_API_KEY"]
+    assert "OTX_API_KEY" in caplog.text and "sup3rs3cretvalue" not in caplog.text
 
 
 def test_the_shipped_env_example_holds_no_values_for_secrets():

@@ -49,8 +49,7 @@ This audit is based on the repository snapshot in `/mnt/d/DEPI/Marsadix` (HEAD `
 
 ### Recon and data sources
 
-- VirusTotal, Censys and Shodan pagination is not implemented yet.
-- Shodan's documented endpoint requires its API key in the query string; logging is redacted, but the key still exists in the request URL. This is a provider/API design limitation and needs a documented mitigation decision.
+- Shodan and Censys integrations were removed from Recon. Remaining passive data sources retain their independent integrations.
 - Reverse DNS currently starts from discovered public IPs; PTR sweeps across ASN ranges are not implemented.
 - Real-world compatibility of all installed tool versions/flags has not been tested. VHost parsing now reads ffuf's `input.FUZZ` (with an isolated regression test), but DNS brute-force behavior still needs an integration test against a live tool.
 - Installer still uses moving `@latest` versions and does not verify downloaded binaries against pinned checksums. Docker build has not been run.

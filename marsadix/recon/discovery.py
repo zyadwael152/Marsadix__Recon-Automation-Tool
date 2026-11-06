@@ -5,7 +5,7 @@ import re
 import urllib.error
 import urllib.request
 from typing import Set, List, Dict, Tuple
-from .api_sources import fetch_virustotal, fetch_alienvault, fetch_shodan, fetch_censys
+from .api_sources import fetch_virustotal, fetch_alienvault
 from ..core import limits, toolstatus
 from ..core.aproc import run_exec
 from .merger import merge_and_track
@@ -169,8 +169,6 @@ async def _async_discover_single(domain: str, api_keys: dict) -> Dict[str, List[
     vt_key = api_keys.get("virustotal")
     chaos_key = api_keys.get("chaos")
     otx_key = api_keys.get("alienvault")
-    shodan_key = api_keys.get("shodan")
-    censys_key = api_keys.get("censys")
 
     tasks = [
         run_cli_tool("subfinder", ["subfinder", "-d", domain, "-silent"], domain=domain),
@@ -182,8 +180,6 @@ async def _async_discover_single(domain: str, api_keys: dict) -> Dict[str, List[
         fetch_crtsh(domain),
         fetch_alienvault(domain, otx_key),
         fetch_virustotal(domain, vt_key),
-        fetch_shodan(domain, shodan_key),
-        fetch_censys(domain, censys_key),
     ]
     results = await asyncio.gather(*tasks)
     tool_outputs = {tool_name: subs for tool_name, subs in results}
