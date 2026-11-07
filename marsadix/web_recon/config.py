@@ -271,16 +271,17 @@ class Member2Config:
         except (OSError, ValueError) as exc:
             raise ConfigError(f"cannot read {path}: {exc}") from exc
         known = {f.name for f in fields(cls)}
-        if "member2" in data:
-            section = data["member2"]
+        table = "web_recon" if "web_recon" in data else ("member2" if "member2" in data else None)
+        if table:
+            section = data[table]
             if not isinstance(section, dict):
-                raise ConfigError("[member2] must be a table")
+                raise ConfigError(f"[{table}] must be a table")
             unknown = sorted(set(section) - known)
             if unknown:
-                raise ConfigError(f"unknown [member2] keys: {', '.join(unknown)}")
+                raise ConfigError(f"unknown [{table}] keys: {', '.join(unknown)}")
             # In a shared config.toml, base keys at the root are also accepted;
-            # the explicit [member2] table wins on conflict.
-            section = {**{k: v for k, v in data.items() if k in known and k != "member2"},
+            # the explicit table wins on conflict.
+            section = {**{k: v for k, v in data.items() if k in known and k not in ("web_recon", "member2")},
                        **section}
         else:
             # A normal Marsadix config.toml: accept only keys this extension

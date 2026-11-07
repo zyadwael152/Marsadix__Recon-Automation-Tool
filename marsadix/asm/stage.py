@@ -10,6 +10,7 @@ import asyncio
 import logging
 
 from marsadix import db
+from marsadix.skills import register_handler
 from .config import ASMConfig
 from .scope import ScopeEnforcer
 from .runtime import ToolResolver
@@ -84,3 +85,8 @@ def run(ctx) -> dict:
             "outcome": outcome,
         }
     }
+
+
+# The registry lists a skill as "active" only when code for it exists: this stage runs the three Nuclei groups.
+for _name in ("nuclei-takeover", "nuclei-exposures", "nuclei-tech-cve"):
+    register_handler(_name)(run)

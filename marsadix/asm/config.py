@@ -31,6 +31,8 @@ class ASMConfig:
     nuclei_enabled: bool = True
     nuclei_tags: tuple[str, ...] = ("takeover", "exposure", "misconfig", "cve", "tech")
     nuclei_severities: tuple[str, ...] = ("critical", "high", "medium", "low", "info")
+    # Template classes that must never run in a scan that only DETECTS (they can disrupt the target).
+    nuclei_exclude_tags: tuple[str, ...] = ("dos", "fuzz", "intrusive")
     nuclei_timeout: int = 300
     nuclei_rate_limit: int = 0
     nuclei_max_targets: int = 50
@@ -64,7 +66,7 @@ class ASMConfig:
             value = os.getenv(f"MARSADIX_ASM_{name.upper()}")
             if value:
                 setattr(cfg, name, int(value))
-        for name in ("nuclei_tags", "nuclei_severities"):
+        for name in ("nuclei_tags", "nuclei_severities", "nuclei_exclude_tags"):
             value = os.getenv(f"MARSADIX_ASM_{name.upper()}")
             if value:
                 setattr(cfg, name, tuple(x.strip().lower() for x in value.split(",") if x.strip()))

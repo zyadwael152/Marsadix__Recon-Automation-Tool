@@ -108,3 +108,13 @@ Still open from this pass: checksum verification of downloaded binaries; pinned 
 Done: C20 (CSV / SARIF / PDF), C18 (Executive summary, Scope & methodology, prioritized findings, tool status, print CSS), C17 (`timemachine`), C21 (`investigate`, `skills`, `benchmark`), C5c (skills registry), C5b (web + ports in parallel), C14 / C14b (benchmark commands).
 
 Still depends on other roles: per-finding Remediation text (needs the remediation database, M19: the report shows a placeholder and uses `marsadix/remediation.py:get_remediation(finding)` as soon as it exists); the skills themselves (asm stage, A1-A8: every skill is "planned" until it calls `register_handler`); real benchmark numbers (need a network and a lab target); C5 "real stage linking" is complete for recon/web/ports/track/graph, `asm` and `monitor` still have no stage.
+
+
+## Repository cleanup after the Person-2 merge
+
+- **One implementation per thing.** `marsadix/web_recon/` is the standalone Web Recon engine (complete). `marsadix/web/` is only what the base pipeline's web stage uses (`stage.py`, `probe.py`, `fingerprint.py`). `marsadix/asm/` is the ASM stage and has its own small modules; it imports nothing from `web` or `web_recon`.
+- **Removed (exact copies nobody imported, and which could not be imported):** `core/{http_client,rate_limit,security,verify}.py`, `web/{js,discovery,errors,normalize,config,tools,crawl}.py`, and the stray `marsadix/coverage.py` (the working Missing Asset Hunter is `recon/coverage.py`).
+- **One config file.** `marsadix/config/config.web_recon.example.toml` was merged into `config.example.toml` as a `[web_recon]` table (`[member2]` is still accepted). The base loader ignores that table, the extension's loader reads it.
+- **Nuclei** now always excludes `dos`, `fuzz` and `intrusive` templates (`-etags`; override with `MARSADIX_ASM_NUCLEI_EXCLUDE_TAGS`). The three Nuclei groups are registered as active skills.
+- **Still not implemented:** the custom detection skills (XSS, SQLi, SSTI, open redirect, CRLF, host header, JWT, .git/.env), the CVE `monitor`, the Censys Platform API, a graphical Time Machine.
+- `tests/test_repo_integrity.py` fails if any module stops importing, any pipeline stage stops loading, or one of the removed copies comes back.

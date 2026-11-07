@@ -89,7 +89,7 @@ def _load_handlers() -> None:
     if _LOADED:
         return
     _LOADED = True
-    for mod in ("marsadix.asm.nuclei", "marsadix.asm.skills"):
+    for mod in ("marsadix.asm.stage", "marsadix.asm.skills"):
         try:
             __import__(mod)
         except ImportError:

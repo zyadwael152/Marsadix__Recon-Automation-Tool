@@ -181,6 +181,10 @@ def warn_if_secrets_in_example(path: str = ".env.example") -> list:
     return leaked
 
 
+# [web_recon] is the table name; [member2] is its old name and is still accepted.
+EXTENSION_TABLES = ("web_recon", "member2")
+
+
 def load_config(path: Optional[str] = None) -> Config:
     """Load config. `path` None -> use ./config.toml if it exists."""
     dotenv = load_dotenv()
@@ -196,6 +200,10 @@ def load_config(path: Optional[str] = None) -> Config:
                 "Upgrade Python or use environment variables instead.")
         try:
             data = tomllib.loads(read_text(toml_path))
+            # Tables read by the Web Recon extension's own loader (marsadix.web_recon.config); the base
+            # settings and the extension's settings can therefore live in ONE config.toml.
+            for _table in EXTENSION_TABLES:
+                data.pop(_table, None)
         except (ValueError, OSError) as e:          # tomllib.TOMLDecodeError is a ValueError
             raise ConfigError(f"cannot read {toml_path}: {e}") from e
         unknown = set(data) - set(known)

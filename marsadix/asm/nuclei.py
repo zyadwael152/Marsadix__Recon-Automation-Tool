@@ -231,6 +231,10 @@ async def run_nuclei(targets: Iterable[str], scan_id: int, target: str,
     ]
     if config.nuclei_severities:
         argv.extend(["-severity", ",".join(config.nuclei_severities)])
+    # Whatever config object calls us (ASMConfig or the Web Recon one), DoS / fuzz / intrusive templates stay off.
+    exclude = getattr(config, "nuclei_exclude_tags", ("dos", "fuzz", "intrusive"))
+    if exclude:
+        argv.extend(["-etags", ",".join(exclude)])
     # Potentially high-impact template engines stay explicitly opt-in.
     if getattr(config, "nuclei_code", False):
         argv.append("-code")
