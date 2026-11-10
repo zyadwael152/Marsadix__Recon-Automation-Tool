@@ -15,6 +15,7 @@ from .config import ASMConfig
 from .scope import ScopeEnforcer
 from .runtime import ToolResolver
 
+from .custom import run as run_custom
 from .nuclei import run_nuclei
 
 log = logging.getLogger(__name__)
@@ -34,7 +35,7 @@ def _targets(ctx) -> list[str]:
     return list(dict.fromkeys(values))
 
 
-def run(ctx) -> dict:
+def _run_nuclei_stage(ctx) -> dict:
     """Execute ASM Nuclei checks for standard/full scans only."""
     if not ctx.allows("standard"):
         return {"skipped": "ASM active checks require standard or full mode"}
@@ -85,6 +86,21 @@ def run(ctx) -> dict:
             "outcome": outcome,
         }
     }
+
+
+def run(ctx) -> dict:
+    """The ASM stage: Nuclei template checks, then the custom detection skills (skills/registry.py decides which)."""
+    out = _run_nuclei_stage(ctx)
+    if not ctx.allows("standard"):
+        return out                                   # passive: nothing may touch the target
+    cfg = ASMConfig.from_runtime(ctx.config)
+    custom = run_custom(ctx, rate_limit=cfg.rate_limit, timeout=cfg.request_timeout)
+    if custom is None:
+        return out
+    if out.get("skipped"):                           # Nuclei had nothing to do, but the custom skills did
+        out = {"asm": {"engine": "nuclei", "status": "skipped", "reason": out["skipped"]}}
+    out["custom_skills"] = custom
+    return out
 
 
 # The registry lists a skill as "active" only when code for it exists: this stage runs the three Nuclei groups.

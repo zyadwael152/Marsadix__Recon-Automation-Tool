@@ -116,10 +116,13 @@ def test_nuclei_never_runs_dos_fuzz_or_intrusive_templates(monkeypatch):
     assert "-dr" in argv and "-ni" in argv and "-duc" in argv       # no redirects, no out-of-band, no self-update
 
 
-def test_the_registry_lists_the_nuclei_groups_as_active_now():
+def test_the_registry_lists_every_skill_as_active_in_the_right_mode():
     from marsadix.skills import registry
-    names = {s.name for s in registry.active_skills("standard", True)}
-    assert {"nuclei-takeover", "nuclei-exposures", "nuclei-tech-cve"} <= names
+    everything = {s.name for s in registry.all_skills()}
+    assert {s.name for s in registry.active_skills("full", True)} == everything
+    assert {s.name for s in registry.active_skills("standard", True)} == {
+        "nuclei-takeover", "nuclei-exposures", "nuclei-tech-cve", "jwt", "git-env-exposure"}
     assert registry.active_skills("passive", True) == []
-    planned = {s.name for s in registry.all_skills() if not registry.is_implemented(s.name)}
-    assert {"xss", "sqli", "ssti", "open-redirect", "crlf", "host-header", "jwt", "git-env-exposure"} <= planned
+    # without --allow-injection the injection-style probes are off even in full mode
+    off = everything - {s.name for s in registry.active_skills("full", False)}
+    assert off == {"xss", "sqli", "ssti", "open-redirect", "crlf", "host-header"}

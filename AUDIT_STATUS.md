@@ -116,5 +116,16 @@ Still depends on other roles: per-finding Remediation text (needs the remediatio
 - **Removed (exact copies nobody imported, and which could not be imported):** `core/{http_client,rate_limit,security,verify}.py`, `web/{js,discovery,errors,normalize,config,tools,crawl}.py`, and the stray `marsadix/coverage.py` (the working Missing Asset Hunter is `recon/coverage.py`).
 - **One config file.** `marsadix/config/config.web_recon.example.toml` was merged into `config.example.toml` as a `[web_recon]` table (`[member2]` is still accepted). The base loader ignores that table, the extension's loader reads it.
 - **Nuclei** now always excludes `dos`, `fuzz` and `intrusive` templates (`-etags`; override with `MARSADIX_ASM_NUCLEI_EXCLUDE_TAGS`). The three Nuclei groups are registered as active skills.
-- **Still not implemented:** the custom detection skills (XSS, SQLi, SSTI, open redirect, CRLF, host header, JWT, .git/.env), the CVE `monitor`, the Censys Platform API, a graphical Time Machine.
+- **Still not implemented:** the CVE `monitor`, the Censys Platform API.
 - `tests/test_repo_integrity.py` fails if any module stops importing, any pipeline stage stops loading, or one of the removed copies comes back.
+
+
+## Custom detection skills and the graphical Time Machine
+
+- **Skills (A5, A8)** run inside the ASM stage after Nuclei (`asm/custom.py`, checks in `asm/skills.py`, safe client in `asm/http.py`): XSS, SQL injection (error-based, time-based with a control request), SSTI, open redirect, CRLF, Host header, JWT review, `.git` / `.env` exposure.
+  - **Evidence only**: a random marker, a database error signature, a confirmed delay or a signature on the response. Nothing is read out of the target; tokens and file contents are never stored; every finding has `exploited=false`.
+  - **Gating**: standard mode runs JWT and `.git`/`.env` only; the injection-style skills need `--mode full` AND `--allow-injection`.
+  - **Safety of the client**: scope check and network guard before every request, the connection goes to the address that was checked, redirects are never followed, bounded bodies, one shared rate limit.
+  - A result of "nothing found" is not stored as a finding and is never presented as "safe".
+- **Time Machine** is now a chart in the HTML report (bars = attack paths per completed scan, +N opened / -N closed, expandable list of the paths) and `time_machine` in the JSON. The report only reads the database; scans without a graph are left out and named.
+- Tested against a deliberately weak local server (every skill must catch its weakness and must not flag the matching safe page). **Not yet run against a real target**: check the false-positive rate on your own lab (DVWA / Juice Shop) with `marsadix benchmark detection`.

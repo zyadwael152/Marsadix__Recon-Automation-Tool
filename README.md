@@ -273,7 +273,7 @@ The differences this project aims for are the combination of recursive recon wit
 - [ ] Import `.nessus` exports
 - [ ] Deeper network assessment module
 - [ ] Scheduled scans
-- [x] Attack Path Time Machine (text view: paths opened / closed between completed scans; graphical view not done)
+- [x] Attack Path Time Machine (`marsadix timemachine` in the terminal and a chart in the HTML report)
 - [ ] Misconfiguration Pattern Hunter (cluster related findings into one root-cause issue instead of listing each separately)
 
 ## 🧪 Testing & evaluation
