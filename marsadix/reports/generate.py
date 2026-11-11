@@ -170,6 +170,7 @@ def _gather(conn, target: str, scan_id: Optional[int], out_dir: Optional[str] = 
         "findings": findings,
         "owasp_coverage": db.get_owasp_coverage(conn, scan_id),
         "time_machine": _time_machine_data(conn, target),
+        "enumeration": [dict(r) for r in db.get_enum_items(conn, scan_id)],
         "source_coverage": db.get_source_coverage(conn, scan_id),
         "graph": db.get_graph(conn, scan_id),  # written by the "graph" pipeline
                                                  # stage (core/graph.py); this
@@ -834,6 +835,41 @@ def _web_section(data: dict) -> str:
 """
 
 
+_ENUM_TITLES = [
+    ("security_header", "Security headers (per host)"), ("banner", "Server banners"), ("cors", "CORS policy"),
+    ("robots_path", "robots.txt rules"), ("sitemap_url", "sitemap.xml URLs"), ("directory_listing", "Directory listings"),
+    ("dns_ns", "Name servers"), ("axfr", "Zone transfer attempts"), ("dns_mx", "Mail exchangers"), ("spf", "SPF"),
+    ("dmarc", "DMARC"), ("mta_sts", "MTA-STS"), ("dkim_selector", "DKIM selectors found"), ("dns_wildcard", "Wildcard DNS"),
+]
+
+
+def _enumeration_section(items: list) -> str:
+    """What the enumeration skills saw (the inventory), grouped by kind. Findings are in the findings table."""
+    if not items:
+        return ""
+    by = {}
+    for i in items:
+        by.setdefault(i["category"], []).append(i)
+    blocks = []
+    for key, title in _ENUM_TITLES + [(k, k) for k in by if k not in dict(_ENUM_TITLES)]:
+        rows = by.get(key)
+        if not rows:
+            continue
+        body = "".join(f"<tr><td>{_e(r['host'])}</td><td>{_e(r['name'])}</td><td>{_e(str(r['value'])[:160])}</td></tr>"
+                       for r in rows[:150])
+        more = f'<p class="muted">... and {len(rows) - 150} more (see the JSON report)</p>' if len(rows) > 150 else ""
+        blocks.append(f"<details><summary>{_e(title)} ({len(rows)})</summary>"
+                      f"<table><thead><tr><th>Host</th><th>Name</th><th>Value</th></tr></thead><tbody>{body}</tbody></table>{more}</details>")
+    return f"""
+  <section>
+    <h2>Enumeration inventory</h2>
+    <p class="muted">What the web and DNS enumeration checks observed, including settings that are fine. Notable
+       problems are listed as findings above; this is the full picture ({len(items)} item(s)).</p>
+    {"".join(blocks)}
+  </section>
+"""
+
+
 def _time_machine_section(steps: list) -> str:
     """Attack Path Time Machine (C17): how the attack paths changed from one completed scan to the next."""
     usable = [s for s in steps if s.get("has_graph")]
@@ -1036,6 +1072,7 @@ def _render_html(data: dict) -> str:
   {_services_section(data)}
   {_technologies_section(data)}
   {_web_section(data)}
+  {_enumeration_section(data.get('enumeration') or [])}
 
   <section>
     <h2>Methodology &amp; limitations</h2>

@@ -99,11 +99,16 @@ class ProbeClient:
         self.allow_private = allow_private            # tests only
         self.limiter = RateLimiter(rate_limit)
         self.requests = 0
+        self.inventory: List[Dict[str, str]] = []          # what the enumeration skills saw (not findings)
         self._lock = threading.Lock()
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
         self._tls = ctx
+
+    def record(self, host: str, category: str, name: str, value: str = "", source: str = "") -> None:
+        with self._lock:
+            self.inventory.append({"host": host, "category": category, "name": name, "value": value, "source": source})
 
     def _pick_ip(self, host: str, port: int) -> Optional[str]:
         try:

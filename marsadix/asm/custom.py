@@ -25,8 +25,14 @@ from .. import db
 from ..core import netguard, toolstatus
 from ..models import WebItemKind
 from ..skills import registry
-from . import skills as custom_skills
+from . import dnsclient, enum_dns, enum_web, skills as custom_skills
+from .dnsclient import DnsClient
 from .http import ProbeClient
+
+# which skills run once per host (base URL), once per parameterised URL, or once per domain (DNS)
+PARAM_SKILLS = custom_skills.PARAM_SKILLS
+HOST_SKILLS = custom_skills.HOST_SKILLS | enum_web.WEB_SKILLS
+DNS_SKILLS = enum_dns.DNS_SKILLS
 
 log = logging.getLogger(__name__)
 
@@ -66,14 +72,14 @@ def collect_targets(ctx) -> Tuple[List[custom_skills.Target], List[custom_skills
     return params, list(hosts.values())
 
 
-def _run_jobs(client: ProbeClient, jobs, workers: int):
+def _run_jobs(client: ProbeClient, dns: DnsClient, jobs, workers: int):
     findings, tested = [], 0
 
     def work(job):
         name, target = job
         handler = custom_skills.handler_for(name)
         try:
-            return handler(client, target) if handler else []
+            return handler(dns if name in DNS_SKILLS else client, target) if handler else []
         except Exception:                                    # one broken probe must not stop the others
             log.exception("skill %s failed on %s", name, target.url)
             toolstatus.record(f"skill:{name}", "failed", "exception while probing")
@@ -98,21 +104,28 @@ def run(ctx, rate_limit: Optional[float] = None, timeout: float = 10) -> Optiona
         return None
 
     params, hosts = collect_targets(ctx)
+    domain = [custom_skills.Target(ctx.scan.id, ctx.target, "", "")] if ctx.in_scope(ctx.target) else []
     jobs = []
     for s in active:
-        if s.name in custom_skills.PARAM_SKILLS:
+        if s.name in PARAM_SKILLS:
             jobs += [(s.name, t) for t in params]
-        elif s.name in custom_skills.HOST_SKILLS:
+        elif s.name in HOST_SKILLS:
             jobs += [(s.name, t) for t in hosts]
+        elif s.name in DNS_SKILLS:
+            jobs += [(s.name, t) for t in domain]
     if not jobs:
         return None
 
-    client = ProbeClient(ctx.scope, rate_limit=rate_limit or getattr(ctx.config, "rate_limit", 10) or 10, timeout=timeout)
-    found, tested = _run_jobs(client, jobs, workers=max(1, min(MAX_WORKERS, getattr(ctx.config, "max_concurrent_tools", MAX_WORKERS))))
+    rate = rate_limit or getattr(ctx.config, "rate_limit", 10) or 10
+    client = ProbeClient(ctx.scope, rate_limit=rate, timeout=timeout)
+    dns = DnsClient(ctx.scope, rate_limit=rate, timeout=min(timeout, 5), resolvers=dnsclient.system_resolvers())
+    found, tested = _run_jobs(client, dns, jobs, workers=max(1, min(MAX_WORKERS, getattr(ctx.config, "max_concurrent_tools", MAX_WORKERS))))
     saved = db.save_many(ctx.conn, "findings", found) if found else 0
-    log.info("custom skills: %d check(s), %d request(s), %d finding(s); finding nothing is NOT proof of safety",
-             tested, client.requests, saved)
-    return {"skills": sorted({s.name for s in active}), "checks": tested, "requests": client.requests,
+    inventory = db.save_enum_items(ctx.conn, ctx.scan.id, client.inventory + dns.inventory)
+    log.info("custom skills: %d check(s), %d request(s), %d finding(s), %d inventory item(s); finding nothing is NOT proof of safety",
+             tested, client.requests + dns.requests, saved, inventory)
+    return {"skills": sorted({s.name for s in active}), "checks": tested, "requests": client.requests + dns.requests,
+            "inventory_saved": inventory,
             "findings_detected": sum(f.status.value == "detected" for f in found),
             "findings_need_review": sum(f.status.value == "needs_review" for f in found),
             "findings_saved": saved, "held_back_needs_opt_in": held_back}

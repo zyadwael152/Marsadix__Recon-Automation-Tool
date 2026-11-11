@@ -129,3 +129,24 @@ Still depends on other roles: per-finding Remediation text (needs the remediatio
   - A result of "nothing found" is not stored as a finding and is never presented as "safe".
 - **Time Machine** is now a chart in the HTML report (bars = attack paths per completed scan, +N opened / -N closed, expandable list of the paths) and `time_machine` in the JSON. The report only reads the database; scans without a graph are left out and named.
 - Tested against a deliberately weak local server (every skill must catch its weakness and must not flag the matching safe page). **Not yet run against a real target**: check the false-positive rate on your own lab (DVWA / Juice Shop) with `marsadix benchmark detection`.
+
+
+## Enumeration skills (web + DNS)
+
+Seven skills with `category="enumeration"` in the registry; each writes **findings** (info / low / medium, only where the evidence is clear) **and an inventory** (table `enum_items`, section "Enumeration inventory" in the HTML report, `enumeration` in the JSON, `marsadix investigate`).
+
+| Skill | Finding when | Inventory |
+|---|---|---|
+| `security-headers` | HSTS (https) / CSP / nosniff / frame protection / Referrer-Policy missing; version in `Server` / `X-Powered-By` | every header with its value or MISSING; banners |
+| `cors` | a random origin (or `null`) is echoed in `Access-Control-Allow-Origin`; medium with credentials | the ACAO / ACAC answers |
+| `robots-sitemap` | robots.txt lists sensitive-looking paths (needs review) | rules, sitemap URLs |
+| `directory-listing` | an index page is served for `/`, `/files/`, `/uploads/` ... (ignored if the server lists any path) | the listed paths |
+| `dns-zone-transfer` | a name server in scope answers AXFR (high; records are counted and discarded) | name servers, attempt results |
+| `email-security` | no / unsafe SPF (`+all`, `?all`, no `all`), no DMARC, `p=none`, no MTA-STS | SPF, DMARC, MTA-STS, MX, DKIM selectors found |
+| `dns-wildcard` | random names resolve (info) | wildcard answer |
+
+- Run in `standard` and `full` (no `--allow-injection` needed: no payloads). Low traffic: a handful of GETs per host, a few DNS queries per domain.
+- DNS uses a stdlib client (`asm/dnsclient.py`, no new dependency) and the system resolvers. An AXFR is only tried against a name server whose name is in scope and which the network guard allows (third-party providers are therefore skipped and recorded as such).
+- If no resolver answers, the DNS skills conclude nothing (no finding, no "none" record).
+- Existing databases get the new table automatically (additive; schema version unchanged).
+- Tests use a fake DNS server (UDP, TCP, AXFR) and a local web server. **Not yet run against a real domain.**

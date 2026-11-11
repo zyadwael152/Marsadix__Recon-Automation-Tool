@@ -181,6 +181,13 @@ def run_investigate(conn, target: str, host: str, scan_id: Optional[int] = None)
         print(f"  [{f['severity']}] {f['title']}  ({f['status']}, {f['confidence']})"
               + (f"  {f['cve_id']}" if f["cve_id"] else ""))
 
+    enum = [r for r in db.get_enum_items(conn, scan_id) if r["host"] == host]
+    print(f"\nEnumeration inventory ({len(enum)})")
+    for r in enum[:40]:
+        print(f"  {r['category']}: {r['name']}" + (f" = {str(r['value'])[:80]}" if r["value"] else ""))
+    if len(enum) > 40:
+        print(f"  ... and {len(enum) - 40} more (see the JSON report)")
+
     node = _n_subdomain(host)
     graph = _graph_for(conn, scan_id)
     paths = [p for p in compute_attack_paths(graph) if p[0] == node]

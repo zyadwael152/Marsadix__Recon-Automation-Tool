@@ -43,6 +43,7 @@ class Skill:
     min_mode: str = "standard"        # passive | standard | full: lowest scan mode that may run it
     needs_opt_in: bool = False        # injection-style probes need --allow-injection
     enabled: bool = True
+    category: str = "detection"       # "detection" (looks for a weakness) | "enumeration" (maps what is there)
 
     @property
     def owasp_category(self) -> Optional[str]:
@@ -74,6 +75,21 @@ SKILLS: List[Skill] = [
           "PortSwigger JWT attacks; HackTricks"),
     Skill("git-env-exposure", "Exposed .git / .env files", "custom", "git_env_exposure",
           "OWASP Testing Guide; HackTricks"),
+    # ---- enumeration skills: findings (info / low / medium) AND an inventory of what was seen ---------------
+    Skill("security-headers", "Security headers and version-revealing headers", "custom", "missing_security_headers",
+          "OWASP Secure Headers Project; OWASP Testing Guide (WSTG-CONF-07)", category="enumeration"),
+    Skill("cors", "CORS policy (reflected / null origin, credentials)", "custom", "cors_misconfiguration",
+          "PortSwigger CORS; OWASP Testing Guide (WSTG-CLNT-07)", category="enumeration"),
+    Skill("robots-sitemap", "robots.txt and sitemap.xml inventory", "custom", "robots_disclosure",
+          "OWASP Testing Guide (WSTG-INFO-03)", category="enumeration"),
+    Skill("directory-listing", "Directory listing enabled", "custom", "directory_listing",
+          "OWASP Testing Guide (WSTG-CONF-04)", category="enumeration"),
+    Skill("dns-zone-transfer", "DNS zone transfer (AXFR) allowed", "custom", "zone_transfer",
+          "RFC 5936; OWASP Testing Guide (WSTG-INFO-02)", category="enumeration"),
+    Skill("email-security", "SPF, DMARC, MTA-STS and DKIM posture", "custom", "email_security",
+          "RFC 7208 (SPF); RFC 7489 (DMARC); RFC 8461 (MTA-STS)", category="enumeration"),
+    Skill("dns-wildcard", "Wildcard DNS record", "custom", "dns_wildcard",
+          "RFC 4592; OWASP Testing Guide (WSTG-INFO-04)", category="enumeration"),
 ]
 
 _HANDLERS: Dict[str, Callable] = {}
@@ -134,10 +150,10 @@ def active_skills(mode: str = "full", allow_injection: bool = True,
 def render_table(mode: str = "full") -> str:
     """Plain-text table for `marsadix skills`."""
     act = {s.name for s in active_skills(mode, allow_injection=True)}
-    rows = [("skill", "engine", "OWASP", "state", "source")]
+    rows = [("skill", "kind", "OWASP", "state", "source")]
     for s in SKILLS:
         state = ("active" if s.name in act else
                  "planned (no handler yet)" if not is_implemented(s.name) else "off")
-        rows.append((s.name, s.engine, (s.owasp_category or "-").split("-")[0], state, s.source_reference))
+        rows.append((s.name, s.category, (s.owasp_category or "-").split("-")[0], state, s.source_reference))
     widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
     return "\n".join("  ".join(c.ljust(w) for c, w in zip(r, widths)).rstrip() for r in rows)

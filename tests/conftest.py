@@ -134,3 +134,10 @@ def _no_real_external_tools(monkeypatch):
     """
     import tempfile
     monkeypatch.setenv("PATH", tempfile.mkdtemp(prefix="marsadix_nopath_"))
+
+
+@pytest.fixture(autouse=True)
+def _no_real_dns_in_tests(monkeypatch):
+    """The DNS skills ask the system resolvers; no test may do that unless it supplies its own fake server."""
+    from marsadix.asm import dnsclient
+    monkeypatch.setattr(dnsclient, "system_resolvers", lambda: [])
