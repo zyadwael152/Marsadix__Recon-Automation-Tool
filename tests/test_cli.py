@@ -37,11 +37,25 @@ def test_target_outside_scope_is_refused(tmp_path, capsys):
     assert rc == 1 and "not in scope" in capsys.readouterr().err
 
 
-def test_unimplemented_commands_exit_3(tmp_path, capsys):
+def test_missing_command_module_exits_3(tmp_path, capsys, monkeypatch):
+    """A command whose module is absent still exits 3 (monitor itself is implemented now)."""
+    monkeypatch.setattr("marsadix.cli.load_callable", lambda path: None)
     dbp = str(tmp_path / "t.db")
     assert main(["--db", dbp, "monitor"]) == 3
     assert "not implemented yet" in capsys.readouterr().err
 
+
+def test_monitor_delegates_to_runner_without_network(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_run(conn, config, dry_run=False, since=None):
+        seen.update(dry_run=dry_run, since=since)
+        return 0
+
+    monkeypatch.setattr("marsadix.cli.load_callable", lambda path: fake_run)
+    dbp = str(tmp_path / "t.db")
+    assert main(["--db", dbp, "monitor", "--dry-run"]) == 0
+    assert seen["dry_run"] is True
 
 def test_report_needs_a_scan(tmp_path, capsys):
     dbp = str(tmp_path / "t.db")
