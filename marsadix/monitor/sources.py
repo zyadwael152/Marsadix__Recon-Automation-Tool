@@ -11,8 +11,13 @@ NVD = 'https://services.nvd.nist.gov/rest/json/cves/2.0'
 KEV = 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json'
 EPSS = 'https://api.first.org/data/v1/epss'
 
-def request_json(url, headers=None, retries=3, timeout=30):
-    """Retry transient errors, obey Retry-After, fail closed on malformed data."""
+RETRY_CODES = (429, 500, 502, 503, 504)
+
+def request_json(url, headers=None, retries=3, timeout=30, extra_retry=()):
+    """Retry transient errors, obey Retry-After, fail closed on malformed data.
+
+    ``extra_retry``: additional HTTP codes worth retrying for one provider (NVD answers 403
+    when its rate limit is exceeded); the wait for those is 30 s, one NVD rate-limit window."""
     hdr = {'User-Agent': 'Marsadix-CVE-Monitor/0.1', 'Accept': 'application/json'}
     hdr.update(headers or {})
     for attempt in range(retries+1):
@@ -20,11 +25,11 @@ def request_json(url, headers=None, retries=3, timeout=30):
             with urlopen(Request(url, headers=hdr), timeout=timeout) as response:
                 return json.load(response)
         except HTTPError as exc:
-            if exc.code not in (429, 500, 502, 503, 504) or attempt == retries:
+            if exc.code not in RETRY_CODES + tuple(extra_retry) or attempt == retries:
                 raise
             delay = exc.headers.get('Retry-After', '')
             try: wait = min(120, max(0, int(delay)))
-            except ValueError: wait = min(60, 2 ** attempt)
+            except ValueError: wait = 30 if exc.code in extra_retry else min(60, 2 ** attempt)
         except (URLError, TimeoutError):
             if attempt == retries: raise
             wait = min(60, 2 ** attempt)
@@ -64,7 +69,7 @@ def fetch_nvd(start, end, api_key='', page_size=2000):
                 'resultsPerPage': min(2000, page_size)}
         index = 0
         while True:
-            payload = request_json(NVD + '?' + urlencode({**base, 'startIndex': index}), headers)
+            payload = request_json(NVD + '?' + urlencode({**base, 'startIndex': index}), headers, extra_retry=(403,))
             records = payload.get('vulnerabilities', [])
             for record in records: yield parse_nvd(record)
             index += len(records)

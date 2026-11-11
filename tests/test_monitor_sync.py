@@ -58,3 +58,54 @@ def test_rejected_cve_loses_its_configurations():
                    "descriptions": [{"lang": "en", "value": "** REJECT ** dup"}],
                    "configurations": [{"nodes": [{"cpeMatch": [{"criteria": "cpe:2.3:a:x:y:*:*:*:*:*:*:*:*", "vulnerable": True}]}]}]}}
     assert sources.parse_nvd(rec)["cpe_matches"] == []
+
+
+def test_lock_blocks_a_second_run_and_expires(monkeypatch):
+    from datetime import timedelta
+    c = _conn(); t0 = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    assert runner.acquire_lock(c, "A", t0) is True
+    assert runner.acquire_lock(c, "B", t0 + timedelta(minutes=5)) is False
+    assert runner.acquire_lock(c, "B", t0 + runner.LOCK_TTL + timedelta(minutes=1)) is True  # stale -> taken over
+    runner.release_lock(c, "A")                      # not the owner: must not free B's lock
+    assert runner.acquire_lock(c, "C", t0 + runner.LOCK_TTL + timedelta(minutes=2)) is False
+
+
+def test_run_skips_when_locked_and_releases_after_success(monkeypatch):
+    c = _conn(); _patch(monkeypatch, [], {"CVE-2023-9999"}, {})
+    assert runner.acquire_lock(c, "other") is True
+    assert runner.run(c, CFG) == 2                   # skipped, nothing fetched
+    runner.release_lock(c, "other")
+    assert runner.run(c, CFG) == 0
+    assert c.execute("select count(*) from monitor_state where key=?", (runner.LOCK,)).fetchone()[0] == 0
+
+
+def test_epss_is_refreshed_for_cves_with_open_findings(monkeypatch):
+    c = _conn(); _patch(monkeypatch, [], {"CVE-2023-9999"}, {})
+    c.execute("insert into scans(target,started_at) values('x','2025-01-01')")
+    c.execute("insert into cves(cve_id,severity,in_kev) values('CVE-2020-5555','high',0)")
+    c.execute("insert into findings(scan_id,host,source,title,severity,status,cve_id,dedup_key,found_at) "
+              "values(1,'h','monitor','t','high','open','CVE-2020-5555','k','2025-01-01')")
+    c.commit()
+    asked = {}
+    def fake_epss(ids): asked["ids"] = set(ids); return {"CVE-2020-5555": 0.42}
+    monkeypatch.setattr(runner, "fetch_epss", fake_epss)
+    runner.synchronize(c, CFG, now=datetime(2025, 1, 1, tzinfo=timezone.utc))
+    assert "CVE-2020-5555" in asked["ids"]
+    assert c.execute("select epss_score from cves where cve_id='CVE-2020-5555'").fetchone()[0] == 0.42
+
+
+def test_nvd_403_is_retried_but_other_403_is_not(monkeypatch):
+    import io, urllib.error
+    calls = {"n": 0}
+    def fake_urlopen(req, timeout=0):
+        calls["n"] += 1
+        raise urllib.error.HTTPError("u", 403, "Forbidden", {}, io.BytesIO(b""))
+    monkeypatch.setattr(sources, "urlopen", fake_urlopen)
+    monkeypatch.setattr(sources.time, "sleep", lambda s: None)
+    try: sources.request_json("http://x", retries=2); raise AssertionError("should raise")
+    except urllib.error.HTTPError: pass
+    assert calls["n"] == 1                           # KEV/EPSS style call: 403 is final
+    calls["n"] = 0
+    try: sources.request_json("http://x", retries=2, extra_retry=(403,)); raise AssertionError("should raise")
+    except urllib.error.HTTPError: pass
+    assert calls["n"] == 3                           # NVD style call: retried
