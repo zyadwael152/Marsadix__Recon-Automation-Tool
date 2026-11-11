@@ -2,7 +2,7 @@
 The environment handed to every external tool Marsadix starts.
 
 Why this exists: a child process inherits the parent's whole environment. If
-Marsadix kept API keys (Shodan, Censys, VirusTotal, NVD, Discord webhook,
+Marsadix kept API keys (VirusTotal, NVD, Discord webhook,
 Telegram token ...) in `os.environ`, EVERY tool it starts -- subfinder, nmap,
 katana, ffuf -- would receive ALL of them, whether or not it needs one.
 

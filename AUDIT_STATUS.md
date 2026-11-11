@@ -49,8 +49,7 @@ This audit is based on the repository snapshot in `/mnt/d/DEPI/Marsadix` (HEAD `
 
 ### Recon and data sources
 
-- VirusTotal, Censys and Shodan pagination is not implemented yet.
-- Shodan's documented endpoint requires its API key in the query string; logging is redacted, but the key still exists in the request URL. This is a provider/API design limitation and needs a documented mitigation decision.
+- Shodan and Censys integrations were removed from Recon. Remaining passive data sources retain their independent integrations.
 - Reverse DNS currently starts from discovered public IPs; PTR sweeps across ASN ranges are not implemented.
 - Real-world compatibility of all installed tool versions/flags has not been tested. VHost parsing now reads ffuf's `input.FUZZ` (with an isolated regression test), but DNS brute-force behavior still needs an integration test against a live tool.
 - Installer still uses moving `@latest` versions and does not verify downloaded binaries against pinned checksums. Docker build has not been run.
@@ -109,3 +108,45 @@ Still open from this pass: checksum verification of downloaded binaries; pinned 
 Done: C20 (CSV / SARIF / PDF), C18 (Executive summary, Scope & methodology, prioritized findings, tool status, print CSS), C17 (`timemachine`), C21 (`investigate`, `skills`, `benchmark`), C5c (skills registry), C5b (web + ports in parallel), C14 / C14b (benchmark commands).
 
 Still depends on other roles: per-finding Remediation text (needs the remediation database, M19: the report shows a placeholder and uses `marsadix/remediation.py:get_remediation(finding)` as soon as it exists); the skills themselves (asm stage, A1-A8: every skill is "planned" until it calls `register_handler`); real benchmark numbers (need a network and a lab target); C5 "real stage linking" is complete for recon/web/ports/track/graph, `asm` and `monitor` still have no stage.
+
+
+## Repository cleanup after the Person-2 merge
+
+- **One implementation per thing.** `marsadix/web_recon/` is the standalone Web Recon engine (complete). `marsadix/web/` is only what the base pipeline's web stage uses (`stage.py`, `probe.py`, `fingerprint.py`). `marsadix/asm/` is the ASM stage and has its own small modules; it imports nothing from `web` or `web_recon`.
+- **Removed (exact copies nobody imported, and which could not be imported):** `core/{http_client,rate_limit,security,verify}.py`, `web/{js,discovery,errors,normalize,config,tools,crawl}.py`, and the stray `marsadix/coverage.py` (the working Missing Asset Hunter is `recon/coverage.py`).
+- **One config file.** `marsadix/config/config.web_recon.example.toml` was merged into `config.example.toml` as a `[web_recon]` table (`[member2]` is still accepted). The base loader ignores that table, the extension's loader reads it.
+- **Nuclei** now always excludes `dos`, `fuzz` and `intrusive` templates (`-etags`; override with `MARSADIX_ASM_NUCLEI_EXCLUDE_TAGS`). The three Nuclei groups are registered as active skills.
+- **Still not implemented:** the CVE `monitor`, the Censys Platform API.
+- `tests/test_repo_integrity.py` fails if any module stops importing, any pipeline stage stops loading, or one of the removed copies comes back.
+
+
+## Custom detection skills and the graphical Time Machine
+
+- **Skills (A5, A8)** run inside the ASM stage after Nuclei (`asm/custom.py`, checks in `asm/skills.py`, safe client in `asm/http.py`): XSS, SQL injection (error-based, time-based with a control request), SSTI, open redirect, CRLF, Host header, JWT review, `.git` / `.env` exposure.
+  - **Evidence only**: a random marker, a database error signature, a confirmed delay or a signature on the response. Nothing is read out of the target; tokens and file contents are never stored; every finding has `exploited=false`.
+  - **Gating**: standard mode runs JWT and `.git`/`.env` only; the injection-style skills need `--mode full` AND `--allow-injection`.
+  - **Safety of the client**: scope check and network guard before every request, the connection goes to the address that was checked, redirects are never followed, bounded bodies, one shared rate limit.
+  - A result of "nothing found" is not stored as a finding and is never presented as "safe".
+- **Time Machine** is now a chart in the HTML report (bars = attack paths per completed scan, +N opened / -N closed, expandable list of the paths) and `time_machine` in the JSON. The report only reads the database; scans without a graph are left out and named.
+- Tested against a deliberately weak local server (every skill must catch its weakness and must not flag the matching safe page). **Not yet run against a real target**: check the false-positive rate on your own lab (DVWA / Juice Shop) with `marsadix benchmark detection`.
+
+
+## Enumeration skills (web + DNS)
+
+Seven skills with `category="enumeration"` in the registry; each writes **findings** (info / low / medium, only where the evidence is clear) **and an inventory** (table `enum_items`, section "Enumeration inventory" in the HTML report, `enumeration` in the JSON, `marsadix investigate`).
+
+| Skill | Finding when | Inventory |
+|---|---|---|
+| `security-headers` | HSTS (https) / CSP / nosniff / frame protection / Referrer-Policy missing; version in `Server` / `X-Powered-By` | every header with its value or MISSING; banners |
+| `cors` | a random origin (or `null`) is echoed in `Access-Control-Allow-Origin`; medium with credentials | the ACAO / ACAC answers |
+| `robots-sitemap` | robots.txt lists sensitive-looking paths (needs review) | rules, sitemap URLs |
+| `directory-listing` | an index page is served for `/`, `/files/`, `/uploads/` ... (ignored if the server lists any path) | the listed paths |
+| `dns-zone-transfer` | a name server in scope answers AXFR (high; records are counted and discarded) | name servers, attempt results |
+| `email-security` | no / unsafe SPF (`+all`, `?all`, no `all`), no DMARC, `p=none`, no MTA-STS | SPF, DMARC, MTA-STS, MX, DKIM selectors found |
+| `dns-wildcard` | random names resolve (info) | wildcard answer |
+
+- Run in `standard` and `full` (no `--allow-injection` needed: no payloads). Low traffic: a handful of GETs per host, a few DNS queries per domain.
+- DNS uses a stdlib client (`asm/dnsclient.py`, no new dependency) and the system resolvers. An AXFR is only tried against a name server whose name is in scope and which the network guard allows (third-party providers are therefore skipped and recorded as such).
+- If no resolver answers, the DNS skills conclude nothing (no finding, no "none" record).
+- Existing databases get the new table automatically (additive; schema version unchanged).
+- Tests use a fake DNS server (UDP, TCP, AXFR) and a local web server. **Not yet run against a real domain.**

@@ -42,8 +42,6 @@ ENV_MAP = {
     # CVE sources
     "NVD_API_KEY": "nvd_api_key",
     # Recon data sources (R2)
-    "SHODAN_API_KEY": "shodan_api_key",
-    "CENSYS_API_KEY": "censys_api_key",
     "VIRUSTOTAL_API_KEY": "virustotal_api_key",
     "OTX_API_KEY": "otx_api_key",
     "CHAOS_API_KEY": "chaos_api_key",
@@ -82,8 +80,6 @@ class Config:
 
     # Recon data sources (R2) - any of these may be empty; a source with no
     # key is skipped, never fatal (see marsadix.recon.sources for the pattern)
-    shodan_api_key: str = field(default="", repr=False)
-    censys_api_key: str = field(default="", repr=False)      # "API_ID:API_SECRET" (Basic auth) or a bearer token
     virustotal_api_key: str = field(default="", repr=False)
     otx_api_key: str = field(default="", repr=False)
     chaos_api_key: str = field(default="", repr=False)
@@ -111,7 +107,7 @@ class Config:
             raise ConfigError("max_permutations must be >= 1")
 
     def has_source_key(self, name: str) -> bool:
-        """e.g. cfg.has_source_key('shodan') -> bool. Used to skip sources cleanly."""
+        """Return whether a configured passive-recon source has a key."""
         return bool(getattr(self, f"{name}_api_key", ""))
 
 
@@ -185,6 +181,10 @@ def warn_if_secrets_in_example(path: str = ".env.example") -> list:
     return leaked
 
 
+# [web_recon] is the table name; [member2] is its old name and is still accepted.
+EXTENSION_TABLES = ("web_recon", "member2")
+
+
 def load_config(path: Optional[str] = None) -> Config:
     """Load config. `path` None -> use ./config.toml if it exists."""
     dotenv = load_dotenv()
@@ -200,6 +200,10 @@ def load_config(path: Optional[str] = None) -> Config:
                 "Upgrade Python or use environment variables instead.")
         try:
             data = tomllib.loads(read_text(toml_path))
+            # Tables read by the Web Recon extension's own loader (marsadix.web_recon.config); the base
+            # settings and the extension's settings can therefore live in ONE config.toml.
+            for _table in EXTENSION_TABLES:
+                data.pop(_table, None)
         except (ValueError, OSError) as e:          # tomllib.TOMLDecodeError is a ValueError
             raise ConfigError(f"cannot read {toml_path}: {e}") from e
         unknown = set(data) - set(known)

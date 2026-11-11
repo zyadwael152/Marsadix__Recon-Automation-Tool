@@ -26,6 +26,17 @@ def test_depth_zero_discovers_root_once_without_recursing(monkeypatch):
     assert "evilexample.com" in result  # retained as source data, but never recursively queried
 
 
+def test_root_target_is_kept_as_a_manual_asset(monkeypatch):
+    async def fake_single(domain, api_keys):
+        return {"www.example.com": ["subfinder"]}
+
+    monkeypatch.setattr(discovery, "_async_discover_single", fake_single)
+    result = asyncio.run(discovery._async_discover_recursive("example.com", {}, 0))
+
+    assert result["example.com"] == ["manual"]
+    assert result["www.example.com"] == ["subfinder"]
+
+
 def test_recursion_requires_a_domain_label_boundary(monkeypatch):
     calls = []
 

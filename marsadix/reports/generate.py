@@ -93,6 +93,18 @@ def _preliminary_posture_score(findings: list[dict]) -> int:
     return max(0, 100 - weighted * 4)
 
 
+def _time_machine_data(conn, target: str, limit: int = 12) -> list:
+    """Attack-path history for the report (read-only: it never builds a missing graph)."""
+    try:
+        from ..core.attackpaths import time_machine
+        steps = time_machine(conn, target, limit=limit, build_missing=False)
+    except Exception:                                   # the report must never fail because of this section
+        log.exception("time machine data unavailable")
+        return []
+    return [{"scan_id": s["scan_id"], "started_at": s["started_at"], "has_graph": s["has_graph"],
+             "paths": len(s["paths"]), "opened": s["opened"], "closed": s["closed"]} for s in steps]
+
+
 def _read_scope_entries(path: Optional[str], limit: int = 40) -> list:
     """The authorized-scope lines (comments stripped), so the report states what was in scope."""
     if not path:
@@ -157,6 +169,8 @@ def _gather(conn, target: str, scan_id: Optional[int], out_dir: Optional[str] = 
         "web_items": [dict(r) for r in db.get_web_items(conn, scan_id)],
         "findings": findings,
         "owasp_coverage": db.get_owasp_coverage(conn, scan_id),
+        "time_machine": _time_machine_data(conn, target),
+        "enumeration": [dict(r) for r in db.get_enum_items(conn, scan_id)],
         "source_coverage": db.get_source_coverage(conn, scan_id),
         "graph": db.get_graph(conn, scan_id),  # written by the "graph" pipeline
                                                  # stage (core/graph.py); this
@@ -821,6 +835,110 @@ def _web_section(data: dict) -> str:
 """
 
 
+_ENUM_TITLES = [
+    ("security_header", "Security headers (per host)"), ("banner", "Server banners"), ("cors", "CORS policy"),
+    ("robots_path", "robots.txt rules"), ("sitemap_url", "sitemap.xml URLs"), ("directory_listing", "Directory listings"),
+    ("dns_ns", "Name servers"), ("axfr", "Zone transfer attempts"), ("dns_mx", "Mail exchangers"), ("spf", "SPF"),
+    ("dmarc", "DMARC"), ("mta_sts", "MTA-STS"), ("dkim_selector", "DKIM selectors found"), ("dns_wildcard", "Wildcard DNS"),
+]
+
+
+def _enumeration_section(items: list) -> str:
+    """What the enumeration skills saw (the inventory), grouped by kind. Findings are in the findings table."""
+    if not items:
+        return ""
+    by = {}
+    for i in items:
+        by.setdefault(i["category"], []).append(i)
+    blocks = []
+    for key, title in _ENUM_TITLES + [(k, k) for k in by if k not in dict(_ENUM_TITLES)]:
+        rows = by.get(key)
+        if not rows:
+            continue
+        body = "".join(f"<tr><td>{_e(r['host'])}</td><td>{_e(r['name'])}</td><td>{_e(str(r['value'])[:160])}</td></tr>"
+                       for r in rows[:150])
+        more = f'<p class="muted">... and {len(rows) - 150} more (see the JSON report)</p>' if len(rows) > 150 else ""
+        blocks.append(f"<details><summary>{_e(title)} ({len(rows)})</summary>"
+                      f"<table><thead><tr><th>Host</th><th>Name</th><th>Value</th></tr></thead><tbody>{body}</tbody></table>{more}</details>")
+    return f"""
+  <section>
+    <h2>Enumeration inventory</h2>
+    <p class="muted">What the web and DNS enumeration checks observed, including settings that are fine. Notable
+       problems are listed as findings above; this is the full picture ({len(items)} item(s)).</p>
+    {"".join(blocks)}
+  </section>
+"""
+
+
+def _time_machine_section(steps: list) -> str:
+    """Attack Path Time Machine (C17): how the attack paths changed from one completed scan to the next."""
+    usable = [s for s in steps if s.get("has_graph")]
+    without = [s["scan_id"] for s in steps if not s.get("has_graph")]
+    note = (f'<p class="muted">Scan(s) without a knowledge graph were left out: '
+            f'{", ".join("#" + str(i) for i in without)}.</p>') if without else ""
+    if len(usable) < 2:
+        return f"""
+  <section>
+    <h2>Attack Path Time Machine</h2>
+    <p>Needs at least two completed scans with a knowledge graph to show a change over time
+       (found {len(usable)}). Run another scan later, then regenerate the report.</p>{note}
+  </section>
+"""
+    n = len(usable)
+    width, height, left, right, top, bottom = 760, 250, 46, 18, 30, 74
+    slot = (width - left - right) / n
+    bar_w = max(14.0, min(58.0, slot * 0.58))
+    base_y = height - bottom
+    peak = max(max(s["paths"] for s in usable), 1)
+    plot_h = base_y - top
+    parts = [f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="Attack paths per scan" '
+             f'style="width:100%;max-width:{width}px;height:auto;color:var(--text)">',
+             f'<line x1="{left}" y1="{base_y}" x2="{width - right}" y2="{base_y}" style="stroke:var(--border)"/>',
+             f'<text x="{left - 8}" y="{top + 4}" text-anchor="end" font-size="11" style="fill:var(--muted)">{peak}</text>',
+             f'<text x="{left - 8}" y="{base_y + 4}" text-anchor="end" font-size="11" style="fill:var(--muted)">0</text>']
+    for i, s in enumerate(usable):
+        cx = left + slot * (i + 0.5)
+        h = plot_h * s["paths"] / peak
+        parts.append(f'<rect x="{cx - bar_w / 2:.1f}" y="{base_y - h:.1f}" width="{bar_w:.1f}" height="{max(h, 1):.1f}" '
+                     f'rx="3" style="fill:var(--accent)"><title>scan #{s["scan_id"]}: {s["paths"]} attack path(s)</title></rect>')
+        parts.append(f'<text x="{cx:.1f}" y="{base_y - h - 6:.1f}" text-anchor="middle" font-size="12" '
+                     f'style="fill:currentColor">{s["paths"]}</text>')
+        parts.append(f'<text x="{cx:.1f}" y="{base_y + 16}" text-anchor="middle" font-size="12" '
+                     f'style="fill:currentColor">#{s["scan_id"]}</text>')
+        parts.append(f'<text x="{cx:.1f}" y="{base_y + 30}" text-anchor="middle" font-size="10" '
+                     f'style="fill:var(--muted)">{_e(str(s["started_at"])[:10])}</text>')
+        if i == 0:
+            parts.append(f'<text x="{cx:.1f}" y="{base_y + 50}" text-anchor="middle" font-size="11" '
+                         f'style="fill:var(--muted)">first</text>')
+        else:
+            o, c = len(s["opened"]), len(s["closed"])
+            parts.append(f'<text x="{cx - 14:.1f}" y="{base_y + 50}" text-anchor="middle" font-size="12" font-weight="600" '
+                         f'style="fill:var(--crit)">+{o}</text>')
+            parts.append(f'<text x="{cx + 14:.1f}" y="{base_y + 50}" text-anchor="middle" font-size="12" font-weight="600" '
+                         f'style="fill:var(--low)">&minus;{c}</text>')
+    parts.append("</svg>")
+    details = []
+    for s in usable[1:]:
+        if not (s["opened"] or s["closed"]):
+            continue
+        lis = "".join(f'<li><span style="color:var(--crit)">+</span> <code>{_e(p)}</code></li>' for p in s["opened"][:40])
+        lis += "".join(f'<li><span style="color:var(--low)">&minus;</span> <code>{_e(p)}</code></li>' for p in s["closed"][:40])
+        more = len(s["opened"]) + len(s["closed"]) - min(len(s["opened"]), 40) - min(len(s["closed"]), 40)
+        extra = f'<li class="muted">... and {more} more (see the JSON report)</li>' if more > 0 else ""
+        details.append(f'<details><summary>Scan #{s["scan_id"]}: {len(s["opened"])} opened, {len(s["closed"])} closed</summary>'
+                       f'<ul>{lis}{extra}</ul></details>')
+    return f"""
+  <section>
+    <h2>Attack Path Time Machine</h2>
+    <p class="muted">Attack paths per completed scan (a path leads from a subdomain to a finding or CVE).
+       <span style="color:var(--crit)">+N</span> = paths opened since the previous scan,
+       <span style="color:var(--low)">&minus;N</span> = paths closed.</p>
+    <div style="overflow-x:auto">{"".join(parts)}</div>{note}
+    {"".join(details) or '<p class="muted">No attack path changed between these scans.</p>'}
+  </section>
+"""
+
+
 def _assets_section(data: dict) -> str:
     assets = data.get("assets") or []
     if not assets:
@@ -925,6 +1043,8 @@ def _render_html(data: dict) -> str:
     {_render_graph_svg(data['graph'])}
   </section>
 
+  {_time_machine_section(data.get('time_machine') or [])}
+
   <section>
     <h2>OWASP Top 10 (2021) coverage</h2>
     <table>
@@ -952,6 +1072,7 @@ def _render_html(data: dict) -> str:
   {_services_section(data)}
   {_technologies_section(data)}
   {_web_section(data)}
+  {_enumeration_section(data.get('enumeration') or [])}
 
   <section>
     <h2>Methodology &amp; limitations</h2>

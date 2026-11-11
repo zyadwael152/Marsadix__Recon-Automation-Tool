@@ -87,6 +87,15 @@ CREATE TABLE IF NOT EXISTS web_items (
     UNIQUE (scan_id, url, kind)
 );
 
+CREATE TABLE IF NOT EXISTS enum_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_id INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+    host TEXT NOT NULL, category TEXT NOT NULL, name TEXT NOT NULL,
+    value TEXT NOT NULL DEFAULT '', source TEXT,
+    UNIQUE (scan_id, host, category, name, value)
+);
+CREATE INDEX IF NOT EXISTS idx_enum_scan ON enum_items(scan_id);
+
 CREATE TABLE IF NOT EXISTS emails (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     scan_id INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
@@ -423,6 +432,36 @@ def get_asset_confidence(conn, scan_id: int, host: str) -> dict:
     """{'sources': [...], 'count': n} for a host. (R4)"""
     sources = get_asset_sources(conn, scan_id, host)
     return {"sources": sources, "count": len(sources)}
+
+def save_enum_items(conn, scan_id: int, items) -> int:
+    """Store the inventory the enumeration skills collected. Duplicates are ignored; returns rows added."""
+    before = conn.total_changes
+    conn.executemany(
+        "INSERT OR IGNORE INTO enum_items (scan_id, host, category, name, value, source) VALUES (?,?,?,?,?,?)",
+        [(scan_id, str(i.get("host", ""))[:253], str(i.get("category", ""))[:40], str(i.get("name", ""))[:200],
+          str(i.get("value", ""))[:500], str(i.get("source", ""))[:40]) for i in items if i.get("host") and i.get("category")])
+    conn.commit()
+    return conn.total_changes - before
+
+
+def get_enum_items(conn, scan_id: int) -> list:
+    return conn.execute("SELECT * FROM enum_items WHERE scan_id=? ORDER BY category, host, name, value", (scan_id,)).fetchall()
+
+
+def update_asset_confidence(conn, scan_id: int, host: str, score: int) -> None:
+    """Persist the computed R4 confidence score for one asset in this scan.
+
+    Scores are bounded to the documented 0-100 range.
+    Updating only the matching scan/host prevents confidence
+    from leaking between scans.
+    """
+    bounded = max(0, min(100, int(score)))
+
+    conn.execute(
+        "UPDATE assets SET confidence_score=? WHERE scan_id=? AND host=?",
+        (bounded, scan_id, host),
+    )
+    conn.commit()
 
 
 def get_source_coverage(conn, scan_id: int) -> dict:

@@ -20,11 +20,36 @@ import logging
 import os
 from contextlib import suppress
 from typing import List, Optional, Set
-
+from dataclasses import dataclass
 from ..core import limits, toolstatus
 from ..core.aproc import MAX_OUTPUT_BYTES, kill_process
 from ..core.childenv import child_env
+@dataclass
+class CrawlRecord:
+    url: str
+    status_code: int = None
+    content_type: str = ""
+    parent_url: str = None
+    source: str = "katana"
 
+
+@dataclass
+class VerifyRecord:
+    url: str
+    status_code: int = None
+    content_type: str = ""
+    location: str = ""
+    final_url: str = ""
+    ip: str = None
+    title: str = ""
+
+
+@dataclass
+class ArchiveRecord:
+    url: str
+    source: str
+    status_code: int = None
+    mime_type: str = ""
 logger = logging.getLogger(__name__)
 
 

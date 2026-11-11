@@ -79,18 +79,21 @@ def _sig(path: List[str], graph: Optional[dict] = None) -> str:
         for i in path)
 
 
-def _graph_for(conn, scan_id: int) -> dict:
+def _graph_for(conn, scan_id: int, build_missing: bool = True) -> dict:
     g = db.get_graph(conn, scan_id)
-    if not g["nodes"]:                                # scan predates / skipped the graph stage
+    if not g["nodes"] and build_missing:              # scan predates / skipped the graph stage
         build_graph(conn, scan_id)
         g = db.get_graph(conn, scan_id)
     return g
 
 
-def time_machine(conn, target: str, limit: Optional[int] = None) -> List[dict]:
+def time_machine(conn, target: str, limit: Optional[int] = None, build_missing: bool = True) -> List[dict]:
     """
     One entry per COMPLETED scan (oldest first): its paths and what changed since the
-    previous entry. {"scan_id", "started_at", "paths": [...], "opened": [...], "closed": [...]}
+    previous entry. {"scan_id", "started_at", "has_graph", "paths": [...], "opened": [...], "closed": [...]}
+
+    build_missing=False never writes to the database (reports use it): a scan without graph rows is marked
+    has_graph=False and skipped in the comparison instead of being read as "every path closed".
     """
     scans = conn.execute(
         "SELECT id, started_at FROM scans WHERE target=? AND status='completed' "
@@ -99,10 +102,14 @@ def time_machine(conn, target: str, limit: Optional[int] = None) -> List[dict]:
         scans = scans[-limit:]
     out, prev = [], None
     for s in scans:
-        graph = _graph_for(conn, s["id"])
+        graph = _graph_for(conn, s["id"]) if build_missing else _graph_for(conn, s["id"], False)
+        if not graph["nodes"]:
+            out.append({"scan_id": s["id"], "started_at": s["started_at"], "has_graph": False,
+                        "paths": [], "opened": [], "closed": []})
+            continue
         paths = sorted({_sig(p, graph) for p in compute_attack_paths(graph)})
         cur = set(paths)
-        out.append({"scan_id": s["id"], "started_at": s["started_at"], "paths": paths,
+        out.append({"scan_id": s["id"], "started_at": s["started_at"], "has_graph": True, "paths": paths,
                     "opened": sorted(cur - prev) if prev is not None else [],
                     "closed": sorted(prev - cur) if prev is not None else []})
         prev = cur
@@ -173,6 +180,13 @@ def run_investigate(conn, target: str, host: str, scan_id: Optional[int] = None)
     for f in findings:
         print(f"  [{f['severity']}] {f['title']}  ({f['status']}, {f['confidence']})"
               + (f"  {f['cve_id']}" if f["cve_id"] else ""))
+
+    enum = [r for r in db.get_enum_items(conn, scan_id) if r["host"] == host]
+    print(f"\nEnumeration inventory ({len(enum)})")
+    for r in enum[:40]:
+        print(f"  {r['category']}: {r['name']}" + (f" = {str(r['value'])[:80]}" if r["value"] else ""))
+    if len(enum) > 40:
+        print(f"  ... and {len(enum) - 40} more (see the JSON report)")
 
     node = _n_subdomain(host)
     graph = _graph_for(conn, scan_id)

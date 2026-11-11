@@ -344,3 +344,36 @@ def test_remediation_text_shows_in_the_report(tmp_path):
     assert "pending" in _remediation_for({"title": "zzz"})
 
 
+
+
+# ------------------------------------------------- Time Machine in the HTML report
+def _scan_with_graph(conn, titles):
+    from marsadix.core.graph import build_graph
+    s = _scan(conn)
+    db.save_many(conn, "assets", [Asset(scan_id=s.id, host="a.example.com", in_scope=True, ip="1.2.3.4")])
+    db.save_many(conn, "findings", [_finding(s, title=t) for t in titles])
+    build_graph(conn, s.id)
+    return s
+
+
+def test_time_machine_chart_shows_scans_and_what_opened_and_closed(conn, tmp_path):
+    _scan_with_graph(conn, ["Old exposure"])
+    _scan_with_graph(conn, ["Old exposure", "New <script>x</script> path"])
+    _scan_with_graph(conn, ["New <script>x</script> path"])
+    assert generate_report(conn, "example.com", fmt="all", out_dir=str(tmp_path)) == 0
+    page = next(tmp_path.glob("*.html")).read_text()
+    assert "Attack Path Time Machine" in page and page.count('<title>scan #') == 3          # one bar per scan
+    assert "Scan #2: 1 opened, 0 closed" in page and "Scan #3: 0 opened, 1 closed" in page
+    assert "finding:New &lt;script&gt;x&lt;/script&gt; path" in page and "<script>x</script>" not in page
+    data = json.loads(next(tmp_path.glob("*.json")).read_text())
+    assert [s["paths"] for s in data["time_machine"]] == [1, 2, 1]
+
+
+def test_time_machine_section_needs_two_scans_and_is_read_only(conn, tmp_path):
+    _scan_with_graph(conn, ["Only one"])
+    before = conn.execute("SELECT COUNT(*) FROM graph_nodes").fetchone()[0]
+    s2 = _scan(conn)                                           # a completed scan whose graph was never built
+    generate_report(conn, "example.com", fmt="html", out_dir=str(tmp_path))
+    page = next(tmp_path.glob("*.html")).read_text()
+    assert "Needs at least two completed scans" in page and f"#{s2.id} were left out" not in page or "left out" in page
+    assert conn.execute("SELECT COUNT(*) FROM graph_nodes").fetchone()[0] == before    # the report wrote nothing

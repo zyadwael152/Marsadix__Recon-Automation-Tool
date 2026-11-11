@@ -181,7 +181,7 @@ class AssetSource(_Model):
     """
     scan_id: int
     host: str
-    source_name: str          # e.g. "subfinder", "shodan", "crt.sh", "amass"
+    source_name: str          # e.g. "subfinder", "crt.sh", "amass"
     id: Optional[int] = None
     found_at: str = field(default_factory=utcnow)
 
