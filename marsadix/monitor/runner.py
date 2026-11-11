@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
+import uuid
 from datetime import datetime, timedelta, timezone
 from .sources import fetch_nvd, fetch_kev, fetch_epss
 from .. import db
@@ -10,6 +12,35 @@ from ..core.config import load_config
 
 log = logging.getLogger(__name__)
 STATE = 'nvd_last_sync'
+LOCK = 'sync_lock'
+LOCK_TTL = timedelta(hours=3)   # a crashed run's lock expires after this
+
+def acquire_lock(conn, owner, now=None):
+    """Atomic, cross-process lock kept in monitor_state (works on SQLite everywhere, Windows too).
+    Returns True if we hold it. A lock older than LOCK_TTL is considered abandoned."""
+    now = now or datetime.now(timezone.utc)
+    cur = conn.execute(
+        'INSERT INTO monitor_state(key,value,updated_at) VALUES (?,?,?) '
+        'ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at '
+        'WHERE monitor_state.updated_at < ?',
+        (LOCK, owner, now.isoformat(), (now - LOCK_TTL).isoformat()))
+    conn.commit()
+    return cur.rowcount == 1
+
+def release_lock(conn, owner):
+    conn.execute('DELETE FROM monitor_state WHERE key=? AND value=?', (LOCK, owner))
+    conn.commit()
+
+def tracked_cve_ids(conn):
+    """CVEs that currently matter to the user (open findings). Their EPSS is refreshed every sync,
+    otherwise EPSS (which moves daily) goes stale for CVEs NVD has not modified."""
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT cve_id FROM findings WHERE cve_id IS NOT NULL AND cve_id <> '' "
+            "AND COALESCE(status,'open') NOT IN ('resolved','closed','fixed')")
+        return {r[0] for r in rows}
+    except Exception:   # older schema without findings.cve_id: nothing to add
+        return set()
 
 def parse_timestamp(value):
     dt = datetime.fromisoformat(value.replace('Z', '+00:00'))
@@ -31,7 +62,7 @@ def synchronize(conn, config, dry_run=False, since=None, now=None):
     kev = fetch_kev()
     if not kev:
         raise ValueError("CISA KEV feed unexpectedly empty")
-    ids = {x['cve_id'] for x in changed} | kev
+    ids = {x['cve_id'] for x in changed} | kev | tracked_cve_ids(conn)
     epss = fetch_epss(ids)
     old_kev = {r['cve_id'] for r in conn.execute('SELECT cve_id FROM cves WHERE in_kev=1')}
     newly_kev = sorted(kev - old_kev)
@@ -77,7 +108,14 @@ def synchronize(conn, config, dry_run=False, since=None, now=None):
 def run(conn, config, dry_run=False, since=None, return_summary=False):
     """CLI entry used by `marsadix monitor`. Returns 0/1, or (rc, summary) when return_summary=True
     so the caller can hand the summary to marsadix.p4_cli.monitor_post_sync (matching + alerts)."""
+    owner = f'{os.getpid()}-{uuid.uuid4().hex[:8]}'
+    locked = False
     try:
+        if not dry_run:   # a dry run writes nothing, so it needs no lock
+            if not acquire_lock(conn, owner):
+                print('another CVE sync is already running (or crashed < 3h ago); skipping this run')
+                return (2, None) if return_summary else 2
+            locked = True
         outcome = synchronize(conn, config, dry_run=dry_run, since=since)
         shown = {k: v for k, v in outcome.items() if k != 'changed_cve_ids'}
         shown['changed_cve_count'] = len(outcome['changed_cve_ids'])
@@ -87,6 +125,8 @@ def run(conn, config, dry_run=False, since=None, return_summary=False):
         log.exception('CVE sync failed; state not advanced')
         print(f'CVE sync failed: {exc}')
         return (1, None) if return_summary else 1
+    finally:
+        if locked: release_lock(conn, owner)
 
 def main(argv=None):
     p = argparse.ArgumentParser(description='Marsadix CVE intelligence updater')
