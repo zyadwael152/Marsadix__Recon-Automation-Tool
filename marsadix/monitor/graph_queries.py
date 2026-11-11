@@ -1,5 +1,4 @@
 """Read-only graph investigations from Person 3; never invent exposure edges."""
-from collections import deque
 from .. import db
 from ..core.attackpaths import compute_attack_paths
 from ..core.graph import get_shared_infrastructure, blast_radius

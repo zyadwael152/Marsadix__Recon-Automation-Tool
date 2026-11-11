@@ -44,10 +44,12 @@ def parse_nvd(item):
     score = sorted(scores)[0][1] if scores else None
     severity = ('critical' if score >= 9 else 'high' if score >= 7 else
                 'medium' if score >= 4 else 'low') if score is not None else 'info'
+    # Rejected CVEs must never match an asset: keep the row but drop its configurations.
+    rejected = str(c.get('vulnStatus', '')).lower() == 'rejected' or description.startswith('** REJECT **')
     # Preserve AND/OR trees and negated CPE matches; the matcher owns their semantics.
     return dict(cve_id=c['id'], description=description, cvss_score=score, severity=severity,
                 published=c.get('published'), modified=c.get('lastModified'),
-                cpe_matches=c.get('configurations', []),
+                cpe_matches=[] if rejected else c.get('configurations', []),
                 references=[r['url'] for r in c.get('references', []) if r.get('url')])
 
 def fetch_nvd(start, end, api_key='', page_size=2000):
@@ -66,8 +68,10 @@ def fetch_nvd(start, end, api_key='', page_size=2000):
             records = payload.get('vulnerabilities', [])
             for record in records: yield parse_nvd(record)
             index += len(records)
-            if not records or index >= int(payload.get('totalResults', 0)): break
+            # Sleep after EVERY request (also the last page of a window), otherwise the first
+            # request of the next 119-day window follows immediately and trips NVD's rate limit.
             time.sleep(.6 if api_key else 6)
+            if not records or index >= int(payload.get('totalResults', 0)): break
         cursor = window_end  # overlap at the boundary, safe via upsert
 
 def fetch_kev():
