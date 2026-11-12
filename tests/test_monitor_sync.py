@@ -109,3 +109,60 @@ def test_nvd_403_is_retried_but_other_403_is_not(monkeypatch):
     try: sources.request_json("http://x", retries=2, extra_retry=(403,)); raise AssertionError("should raise")
     except urllib.error.HTTPError: pass
     assert calls["n"] == 3                           # NVD style call: retried
+
+
+def _item(i):
+    d = dict(ITEM); d["cve_id"] = f"CVE-2024-{i:05d}"; return d
+
+
+def test_large_backfill_is_streamed_not_listed(monkeypatch):
+    """fetch_nvd must be consumed lazily (one record at a time), never materialised with list()."""
+    c = _conn(); produced = {"n": 0}
+
+    def gen():
+        for i in range(3000):
+            produced["n"] += 1
+            yield _item(i)
+
+    monkeypatch.setattr(runner, "fetch_nvd", lambda s, e, k="": gen())
+    monkeypatch.setattr(runner, "fetch_kev", lambda: {"CVE-2023-9999"})
+    seen_at_epss = {}
+    monkeypatch.setattr(runner, "fetch_epss", lambda ids: seen_at_epss.update(n=len(ids)) or {})
+    out = runner.synchronize(c, CFG, now=datetime(2025, 1, 1, tzinfo=timezone.utc))
+    assert produced["n"] == 3000 and out["nvd_records"] == 3000 and len(out["changed_cve_ids"]) == 3000
+    assert c.execute("select count(*) from cves").fetchone()[0] == 3001      # 3000 NVD + 1 KEV-only
+    assert seen_at_epss["n"] == 3001
+
+
+def test_failure_in_the_middle_of_the_stream_leaves_db_untouched(monkeypatch):
+    c = _conn()
+
+    def gen():
+        for i in range(5): yield _item(i)
+        raise RuntimeError("NVD died mid-way")
+
+    monkeypatch.setattr(runner, "fetch_nvd", lambda s, e, k="": gen())
+    assert runner.run(c, CFG) == 1
+    assert c.execute("select count(*) from cves").fetchone()[0] == 0
+    assert db.get_state(c, runner.STATE) is None
+    assert c.execute("select count(*) from temp.sqlite_master where name='nvd_stage'").fetchone()[0] == 0
+    assert c.execute("select count(*) from monitor_state where key=?", (runner.LOCK,)).fetchone()[0] == 0
+
+
+def test_dry_run_leaves_no_staging_table_and_no_rows(monkeypatch):
+    c = _conn(); _patch(monkeypatch, [_item(1)], {"CVE-2023-9999"}, {})
+    out = runner.synchronize(c, CFG, dry_run=True, now=datetime(2025, 1, 1, tzinfo=timezone.utc))
+    assert out["nvd_records"] == 1
+    assert c.execute("select count(*) from cves").fetchone()[0] == 0
+    assert c.execute("select count(*) from temp.sqlite_master where name='nvd_stage'").fetchone()[0] == 0
+
+
+def test_resync_keeps_kev_and_epss_of_updated_cves(monkeypatch):
+    c = _conn(); now = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    _patch(monkeypatch, [_item(1)], {"CVE-2024-00001"}, {"CVE-2024-00001": 0.7})
+    runner.synchronize(c, CFG, now=now)
+    changed = _item(1); changed["description"] = "updated"
+    _patch(monkeypatch, [changed], {"CVE-2024-00001"}, {})
+    runner.synchronize(c, CFG, now=datetime(2025, 1, 2, tzinfo=timezone.utc))
+    row = c.execute("select description,in_kev,epss_score from cves where cve_id='CVE-2024-00001'").fetchone()
+    assert (row[0], row[1], row[2]) == ("updated", 1, 0.7)

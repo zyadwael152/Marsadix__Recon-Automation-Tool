@@ -58,18 +58,37 @@ def synchronize(conn, config, dry_run=False, since=None, now=None):
     # Small overlap protects against provider indexing lag and equal timestamps.
     if not since and saved: start -= timedelta(minutes=5)
     if start > now: raise ValueError('sync start is in the future')
-    changed = list(fetch_nvd(start, now, getattr(config, 'nvd_api_key', '')))
+    # Stream NVD into a TEMP table (disk-backed, never touches the main DB's write lock) instead of
+    # list(): a long --since backfill can be 200k+ CVEs with large configuration trees.
+    conn.execute('DROP TABLE IF EXISTS temp.nvd_stage')
+    conn.execute('''CREATE TEMP TABLE nvd_stage (cve_id TEXT PRIMARY KEY, description TEXT, cvss_score REAL,
+                    severity TEXT, published TEXT, modified TEXT, cpe_matches TEXT, refs TEXT)''')
+    try:
+        return _synchronize(conn, config, dry_run, start, now)
+    finally:
+        try: conn.execute('DROP TABLE IF EXISTS temp.nvd_stage'); conn.commit()
+        except Exception: pass
+
+def _synchronize(conn, config, dry_run, start, now):
+    changed_ids = set()
+    for item in fetch_nvd(start, now, getattr(config, 'nvd_api_key', '')):
+        conn.execute('INSERT OR REPLACE INTO temp.nvd_stage VALUES (?,?,?,?,?,?,?,?)',
+                     (item['cve_id'], item['description'], item['cvss_score'], item['severity'],
+                      item['published'], item['modified'], json.dumps(item['cpe_matches']),
+                      json.dumps(item['references'])))
+        changed_ids.add(item['cve_id'])
+    conn.commit()   # flush staging and drop the implicit transaction so no read lock is held while on the network
     kev = fetch_kev()
     if not kev:
         raise ValueError("CISA KEV feed unexpectedly empty")
-    ids = {x['cve_id'] for x in changed} | kev | tracked_cve_ids(conn)
+    ids = changed_ids | kev | tracked_cve_ids(conn)
     epss = fetch_epss(ids)
     old_kev = {r['cve_id'] for r in conn.execute('SELECT cve_id FROM cves WHERE in_kev=1')}
     newly_kev = sorted(kev - old_kev)
     # changed_cve_ids / total are what marsadix.monitor.matching_run.extract_sync_info reads,
     # so the matcher re-evaluates every CVE NVD modified in this window (not only KEV ones).
-    summary = {'nvd_records': len(changed), 'total': len(changed),
-               'changed_cve_ids': sorted({x['cve_id'] for x in changed}),
+    summary = {'nvd_records': len(changed_ids), 'total': len(changed_ids),
+               'changed_cve_ids': sorted(changed_ids),
                'kev_total': len(kev),
                'new_kev': newly_kev, 'epss_updated': len(epss),
                'since': start.isoformat(), 'until': now.isoformat(), 'dry_run': dry_run}
@@ -77,17 +96,15 @@ def synchronize(conn, config, dry_run=False, since=None, now=None):
     try:
         # Do not use db.save_cve: its REPLACE operation resets EPSS/KEV and may
         # delete dependent rows in future schemas.
-        for item in changed:
-            conn.execute('''INSERT INTO cves
-                (cve_id,description,cvss_score,severity,published,modified,cpe_matches,refs,in_kev,epss_score)
-                VALUES (?,?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(cve_id) DO UPDATE SET
-                description=excluded.description,cvss_score=excluded.cvss_score,
-                severity=excluded.severity,published=excluded.published,modified=excluded.modified,
-                cpe_matches=excluded.cpe_matches,refs=excluded.refs''',
-                (item['cve_id'], item['description'], item['cvss_score'], item['severity'],
-                 item['published'], item['modified'], json.dumps(item['cpe_matches']),
-                 json.dumps(item['references']), int(item['cve_id'] in kev), epss.get(item['cve_id'])))
+        # in_kev / epss_score are filled by the statements below (never reset by this upsert).
+        conn.execute('''INSERT INTO cves
+            (cve_id,description,cvss_score,severity,published,modified,cpe_matches,refs,in_kev,epss_score)
+            SELECT cve_id,description,cvss_score,severity,published,modified,cpe_matches,refs,0,NULL
+            FROM temp.nvd_stage WHERE 1
+            ON CONFLICT(cve_id) DO UPDATE SET
+            description=excluded.description,cvss_score=excluded.cvss_score,
+            severity=excluded.severity,published=excluded.published,modified=excluded.modified,
+            cpe_matches=excluded.cpe_matches,refs=excluded.refs''')
         # KEV feed is an authoritative current membership snapshot. New KEV records
         # not yet present in NVD still need to be represented for recheck.
         for cve_id in kev:
