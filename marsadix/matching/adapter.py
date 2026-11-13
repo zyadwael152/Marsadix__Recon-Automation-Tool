@@ -123,7 +123,9 @@ def to_p4_asset(tech: Any, asset_row: Any = None, host_platforms: Iterable[str] 
     version = str(version).strip() if version not in (None, "") else None
     cdn = _get(asset_row or {}, "behind_cdn", None)
     if cdn is None:
-        cdn = bool(_get(asset_row or {}, "cdn", "") or _get(asset_row or {}, "cdn_name", ""))
+        # real schema (marsadix.db assets table): is_cdn + cdn_name
+        cdn = bool(_truthy(_get(asset_row or {}, "is_cdn", 0)) or _get(asset_row or {}, "cdn", "")
+                   or _get(asset_row or {}, "cdn_name", ""))
     facing = _get(asset_row or {}, "internet_facing", None)
     crit = str(_get(asset_row or {}, "criticality", "medium") or "medium").lower()
     if crit not in ("low", "medium", "high", "critical"):

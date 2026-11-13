@@ -214,6 +214,7 @@ def run_matching(conn: sqlite3.Connection, *, settings: Optional[AlertSettings] 
             res = p4data.upsert_finding(work, key, {
                 "scan_id": scan_id, "host": a.host, "title": f"{cve.id} in {a.name or product} {a.version or ''}".strip(),
                 "severity": pr.level.label, "status": "open", "category": "cve", "source": "monitor", "cve_id": cve.id,
+                "owasp_category": "A06:2021", "in_kev": int(cve.kev), "source_reference": "NVD/CISA KEV/EPSS",
                 "product": product, "version": a.version, "cvss": cve.cvss, "epss": cve.epss, "kev": int(cve.kev),
                 "confidence": conf.label, "priority_score": pr.score, "risk_score": risk.score,
                 "description": cve.description[:2000], "remediation_key": rem.match_value, "template_id": cve.id,
@@ -248,7 +249,7 @@ def run_matching(conn: sqlite3.Connection, *, settings: Optional[AlertSettings] 
         if all_cves:
             hosts = {a.host for a in assets}
             for f in p4data.load_findings(work, source="monitor", open_only=True):
-                if f.get("dedup_key") and f["dedup_key"] not in current_keys and f.get("host") in hosts and f.get("category") == "cve":
+                if f.get("dedup_key") and f["dedup_key"] not in current_keys and f.get("host") in hosts and f.get("cve_id"):  # 'category' is not a column of the real findings table
                     update_row(work, "findings", "id", f["id"], {"status": "resolved", "last_seen": p4data.now_iso()})
                     summary.findings_resolved += 1
             work.commit()

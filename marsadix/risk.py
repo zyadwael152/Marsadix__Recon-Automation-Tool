@@ -123,7 +123,8 @@ def finding_from_row(row: Mapping[str, Any], asset_row: Optional[Mapping[str, An
     pr = compute_priority(None if cvss is None else float(cvss), None if epss is None else float(epss), kev, conf)
     facing = _truthy(asset_row.get("internet_facing"), True)
     cdn = asset_row.get("behind_cdn")
-    cdn = _truthy(cdn, False) if cdn is not None else bool(asset_row.get("cdn"))
+    cdn = (_truthy(cdn, False) if cdn is not None
+           else bool(_truthy(asset_row.get("is_cdn"), False) or asset_row.get("cdn") or asset_row.get("cdn_name")))
     crit = str(asset_row.get("criticality") or "medium").lower()
     return RiskedFinding(
         cve_id=str(row.get("cve_id") or row.get("title") or ""), host=str(row.get("host") or ""),
