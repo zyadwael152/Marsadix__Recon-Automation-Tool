@@ -19,6 +19,7 @@ from typing import Tuple
 
 from .cpe import CPEParseError, parse_cpe_cached
 from .models import Asset, Confidence, MatchResult, VersionSource
+from .version import is_distro_packaged
 
 __all__ = ["SOURCE_CONFIDENCE", "ConfidenceResult", "base_confidence", "assess"]
 
@@ -55,6 +56,9 @@ def assess(match: MatchResult, asset: Asset = None) -> ConfidenceResult:
     elif not match.version_compared and level > Confidence.MEDIUM:
         level = Confidence.MEDIUM
         reasons.append("version not compared -> capped at medium")
+    if match.version_compared and level > Confidence.MEDIUM and is_distro_packaged(asset.version):
+        level = Confidence.MEDIUM
+        reasons.append("distro-packaged version: the vendor may have backported the fix -> capped at medium")
     if match.platform_unverified and level > Confidence.LOW:
         level = Confidence(level - 1)
         reasons.append("platform condition unverified -> downgraded one level")

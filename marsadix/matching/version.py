@@ -77,12 +77,43 @@ class Version:
         return self.raw
 
 
+_EPOCH = re.compile(r"^\d+:")
+_DISTRO = re.compile(r"(?:[-~+]\d*\.?(?:ubuntu|deb\d*u?\d*|debian|el\d+|fc\d+|amzn|build)[\w.~+-]*"
+                     r"|\+(?:dfsg|ds)\d*[\w.~+-]*)$")
+
+
+def _strip_distro(s: str) -> tuple:
+    """Return (upstream_version, was_distro_packaged).
+
+    NVD ranges use upstream versions. A Debian/Ubuntu/RPM string such as ``1:2.4.7-1ubuntu4`` is the
+    upstream ``2.4.7`` plus packaging noise (epoch, revision); comparing the noise made the asset look
+    NEWER than ``2.4.7`` and so hid a vulnerable host from ``versionEndIncluding 2.4.7`` ranges."""
+    distro = False
+    if _EPOCH.match(s):
+        s, distro = _EPOCH.sub("", s, count=1), True
+    m = _DISTRO.search(s)
+    if m and m.start() > 0:
+        s, distro = s[:m.start()], True
+        s = re.sub(r"-\d+$", "", s)           # Debian revision left behind, e.g. 2.4.7-1+deb10u2 -> 2.4.7-1 -> 2.4.7
+    return s, distro
+
+
+def is_distro_packaged(raw: object) -> bool:
+    """True if the version string carries distro packaging (epoch / ubuntu / deb / el revision):
+    the vendor may have backported a fix without changing the upstream version number."""
+    try:
+        return _strip_distro(str(raw).strip().lower())[1]
+    except Exception:
+        return False
+
+
 def parse_version(raw: object) -> Version:
     if raw is None:
         raise VersionParseError("version is None")
     s = str(raw).strip().lower()
     if len(s) > 128:
         raise VersionParseError("version string too long")
+    s = _strip_distro(s)[0]
     if len(s) > 1 and s[0] == "v" and s[1].isdigit():
         s = s[1:]
     if not s or not s[0].isdigit():

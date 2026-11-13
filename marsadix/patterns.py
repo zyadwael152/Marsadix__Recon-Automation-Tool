@@ -419,7 +419,7 @@ def persist_findings(conn: sqlite3.Connection, findings: Iterable[PatternFinding
         res = p4data.upsert_finding(conn, f.dedup_key, {
             "scan_id": f.scan_id if f.scan_id is not None else default_scan, "host": f.host, "title": f.title,
             "severity": f.severity, "status": f.status, "category": "pattern", "source": "pattern", "rule_id": f.rule_id,
-            "owasp": f.owasp, "remediation_key": f.remediation_key, "confidence": f.confidence,
+            "owasp": f.owasp, "owasp_category": p4data.owasp_full(f.owasp), "source_reference": "Marsadix misconfiguration pattern", "remediation_key": f.remediation_key, "confidence": f.confidence,
             "evidence": "\n".join(f.evidence)[:8000], "description": "\n".join(f.evidence)[:2000], "template_id": f.rule_id,
             "monitor_run_id": monitor_run_id})
         created += res["created"]

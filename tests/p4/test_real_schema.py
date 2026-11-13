@@ -27,10 +27,10 @@ def test_is_cdn_column_is_honoured():
     assert to_p4_asset({"host": "h", "cpe": CPE % "1"}, {"is_cdn": 1}).behind_cdn is True
 
 
-def test_cve_finding_is_tagged_owasp_a06_and_kev():
+def test_cve_finding_is_tagged_with_canonical_owasp_a06_and_kev():
     c = _seed(); run_matching(c, settings=AlertSettings(), all_cves=True, no_alerts=True)
     row = c.execute("select owasp_category,in_kev from findings where cve_id='CVE-2021-41773'").fetchone()
-    assert (row["owasp_category"], row["in_kev"]) == ("A06:2021", 1)
+    assert (row["owasp_category"], row["in_kev"]) == ("A06:2021-Vulnerable_and_Outdated_Components", 1)
 
 
 def test_finding_is_resolved_after_the_asset_is_patched():

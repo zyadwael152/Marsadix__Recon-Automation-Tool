@@ -214,7 +214,7 @@ def run_matching(conn: sqlite3.Connection, *, settings: Optional[AlertSettings] 
             res = p4data.upsert_finding(work, key, {
                 "scan_id": scan_id, "host": a.host, "title": f"{cve.id} in {a.name or product} {a.version or ''}".strip(),
                 "severity": pr.level.label, "status": "open", "category": "cve", "source": "monitor", "cve_id": cve.id,
-                "owasp_category": "A06:2021", "in_kev": int(cve.kev), "source_reference": "NVD/CISA KEV/EPSS",
+                "owasp_category": p4data.owasp_full("A06:2021"), "in_kev": int(cve.kev), "source_reference": "NVD/CISA KEV/EPSS",
                 "product": product, "version": a.version, "cvss": cve.cvss, "epss": cve.epss, "kev": int(cve.kev),
                 "confidence": conf.label, "priority_score": pr.score, "risk_score": risk.score,
                 "description": cve.description[:2000], "remediation_key": rem.match_value, "template_id": cve.id,

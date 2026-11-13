@@ -143,6 +143,8 @@ def collect_inputs(conn: sqlite3.Connection, target: str = "*") -> AttackSurface
     inp.versioned_technologies = sum(1 for t in techs if str(t.get("version") or "").strip() not in ("", "*", "-"))
     inp.ports = sorted(f"{s.get('host')}:{s.get('port')}" for s in services if str(s.get("state") or "open").lower() == "open")
     for f in findings:
+        if p4data.is_rollup(f):
+            continue
         key = str(f.get("dedup_key") or f"id:{f.get('id')}")
         is_open = str(f.get("status") or "open").lower() not in CLOSED
         host = str(f.get("host") or "")

@@ -115,3 +115,20 @@ def upsert_finding(conn: sqlite3.Connection, dedup_key: str, values: Dict[str, A
     row.setdefault("created_at", ts)
     row.setdefault("status", "open")
     return {"id": insert_row(conn, "findings", row), "created": True}
+
+
+def owasp_full(code):
+    """'A06:2021' -> 'A06:2021-Vulnerable_and_Outdated_Components' (the form marsadix.owasp and
+    db.get_owasp_coverage use; a short code would be counted as a separate, bogus category)."""
+    from .owasp import ALL_CATEGORIES
+    code = str(code or "").strip()
+    if not code:
+        return None
+    prefix = code.split("-")[0]
+    return next((c for c in ALL_CATEGORIES if c.split("-")[0] == prefix), None)
+
+
+def is_rollup(row) -> bool:
+    """The 'outdated-component' pattern finding only summarises CVE findings that already exist;
+    counting both would double-count the same exposure in the attack surface score."""
+    return str(row.get("source") or "") == "pattern" and str(row.get("template_id") or row.get("rule_id") or "") == "outdated-component"
