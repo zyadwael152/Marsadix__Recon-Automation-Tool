@@ -1,3 +1,0 @@
-railway.com
-*.railway.com
-backboard.railway.com
