@@ -166,7 +166,6 @@ nano .env
 | `CHAOS_API_KEY` | اختياري | التسجيل على `chaos.projectdiscovery.io` |
 | `DISCORD_WEBHOOK_URL` | اختياري | Discord: Settings ثم Integrations ثم Webhooks ثم New Webhook |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | اختياري | اعملي بوت عن طريق `@BotFather` في تيليجرام |
-| `WEBHOOK_URL` | اختياري | أي endpoint عام يستقبل POST (Slack/Teams/الخ) |
 
 **اتأكد:** شغّل `marsadix doctor` وبص على آخر سطر. المفروض يقول `API key: set`.
 

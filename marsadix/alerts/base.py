@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Protocol
 
 __all__ = ["AlertPayload", "DeliveryResult", "Notifier", "truncate", "ELLIPSIS", "CHANNELS"]
 
-CHANNELS = ("discord", "telegram", "email", "webhook", "slack", "teams")
+CHANNELS = ("discord", "telegram")
 ELLIPSIS = "…"
 
 

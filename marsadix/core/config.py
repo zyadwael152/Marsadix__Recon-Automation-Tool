@@ -50,7 +50,6 @@ ENV_MAP = {
     # This is the env var *name*, not a secret value.
     "TELEGRAM_BOT_TOKEN": "telegram_bot_token",  # nosec B105
     "TELEGRAM_CHAT_ID": "telegram_chat_id",
-    "WEBHOOK_URL": "webhook_url",
 }
 
 
@@ -88,7 +87,6 @@ class Config:
     discord_webhook: str = field(default="", repr=False)
     telegram_bot_token: str = field(default="", repr=False)
     telegram_chat_id: str = field(default="", repr=False)
-    webhook_url: str = field(default="", repr=False)
 
     def validate(self) -> None:
         if self.max_depth < 0:

@@ -98,8 +98,8 @@ def test_monitor_flags_and_post_sync(db):
     seed_basic(db)
     parser = argparse.ArgumentParser()
     p4_cli.add_monitor_arguments(parser)
-    a = parser.parse_args(["--dry-run", "--all", "--channel", "discord", "--channel", "slack"])
-    assert a.dry_run and a.all_cves and a.channel == ["discord", "slack"] and not a.no_alerts
+    a = parser.parse_args(["--dry-run", "--all", "--channel", "discord", "--channel", "telegram"])
+    assert a.dry_run and a.all_cves and a.channel == ["discord", "telegram"] and not a.no_alerts
     lines = []
     client = FakeClient()
     s = p4_cli.monitor_post_sync(db, a, {"new_kev": [], "total": 5}, out=lines.append, client=client, sleep=Sleeper())
@@ -107,7 +107,7 @@ def test_monitor_flags_and_post_sync(db):
 
 
 def test_doctor_lines_show_state_not_secrets():
-    s = AlertSettings(discord_webhook="https://discord.com/api/webhooks/1/SECRETTOKEN", smtp_password="PW123456", allow_private_webhooks=True)
-    text = "\n".join(p4_cli.doctor_lines(s))
-    assert "discord" in text and "configured" in text and "not configured" in text and "ALLOWED" in text
-    assert "SECRETTOKEN" not in text and "PW123456" not in text
+    s = AlertSettings(discord_webhook="https://discord.com/api/webhooks/1/SECRETTOKEN")
+    lines = p4_cli.doctor_lines(s)
+    assert [l.split()[2:4] for l in lines] == [["discord", "configured"], ["telegram", "not"]]
+    assert "SECRETTOKEN" not in "\n".join(lines)

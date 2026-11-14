@@ -131,7 +131,7 @@ def run_matching(conn: sqlite3.Connection, *, settings: Optional[AlertSettings] 
                  notifiers: Optional[Mapping[str, Notifier]] = None, changed_cve_ids: Optional[Iterable[str]] = None,
                  new_kev: Iterable[str] = (), synced: int = 0, all_cves: bool = False, dry_run: bool = False,
                  no_alerts: bool = False, channels: Optional[Iterable[str]] = None, client: Any = None,
-                 smtp_factory: Any = None, resolver: Any = None, sleep: Any = None) -> MatchRunSummary:
+                 sleep: Any = None) -> MatchRunSummary:
     summary = MatchRunSummary(dry_run=dry_run, records_synced=synced)
     work = _copy_to_memory(conn) if dry_run else conn
     try:
@@ -140,7 +140,7 @@ def run_matching(conn: sqlite3.Connection, *, settings: Optional[AlertSettings] 
         settings = settings or AlertSettings.from_env()
         channel_list = [c for c in (channels or [])]
         if notifiers is None:
-            kw = {"client": client, "smtp_factory": smtp_factory, "resolver": resolver}
+            kw = {"client": client}
             if sleep is not None:
                 kw["sleep"] = sleep
             notifiers = {} if no_alerts else build_notifiers(settings, channel_list or None, **kw)

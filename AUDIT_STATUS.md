@@ -65,7 +65,7 @@ This audit is based on the repository snapshot in `/mnt/d/DEPI/Marsadix` (HEAD `
 ### CVE monitoring and risk
 
 - `marsadix/monitor/runner.py` is absent, so NVD/KEV clients, incremental sync, scheduling, KEV rechecks, CPE matching, confidence levels, EPSS integration and monitor-driven alerts are not operational end-to-end.
-- Alert rows/configuration exist, but delivery for Discord/Telegram/email/webhooks and Slack/Teams is not implemented end-to-end.
+- Alert delivery is implemented for Discord and Telegram only (M12). E-mail, the generic webhook, Slack and Teams (M14 e-mail part, M18) were deliberately removed.
 - Context-aware risk scoring, misconfiguration pattern hunting, attack-surface score trends and remediation database are not complete.
 - OWASP percentage currently counts categories with findings; that is not equivalent to measuring which categories were actually tested. The report wording/metric needs redesign once detection coverage is recorded by the ASM stage.
 

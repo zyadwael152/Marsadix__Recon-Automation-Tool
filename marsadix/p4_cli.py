@@ -173,7 +173,4 @@ def monitor_post_sync(conn: sqlite3.Connection, args: argparse.Namespace, sync_r
 def doctor_lines(settings: Optional[AlertSettings] = None) -> List[str]:
     """Lines for ``marsadix doctor`` - which alert channels are configured (no secrets)."""
     settings = settings or AlertSettings.from_env()
-    lines = [f"alert channel {name:<9} {state}" for name, state in settings.describe().items()]
-    if settings.allow_private_webhooks:
-        lines.append("webhooks: private/loopback destinations ALLOWED (MARSADIX_ALLOW_PRIVATE_WEBHOOKS=1)")
-    return lines
+    return [f"alert channel {name:<9} {state}" for name, state in settings.describe().items()]

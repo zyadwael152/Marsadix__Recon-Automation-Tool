@@ -47,6 +47,20 @@ def build_payload(a: AlertPayload) -> Dict:
     return {"username": "Marsadix", "allowed_mentions": {"parse": []}, "embeds": [embed]}
 
 
+_DISCORD_HOSTS = ("discord.com", "discordapp.com", "ptb.discord.com", "canary.discord.com")
+
+
+def is_discord_webhook_url(url: str) -> bool:
+    """Alerts carry CVE / host details, so only ever send them to a real Discord webhook."""
+    from urllib.parse import urlsplit
+    try:
+        u = urlsplit(url.strip())
+        return (u.scheme == "https" and (u.hostname or "").lower() in _DISCORD_HOSTS
+                and u.path.startswith("/api/webhooks/") and not u.username and u.port in (None, 443))
+    except ValueError:
+        return False
+
+
 class DiscordNotifier:
     name = "discord"
 
@@ -63,6 +77,9 @@ class DiscordNotifier:
     def send(self, alert: AlertPayload) -> DeliveryResult:
         if not self.configured:
             return DeliveryResult(False, error="discord not configured", skipped=True)
+        if not is_discord_webhook_url(self._url):
+            return DeliveryResult(False, error="DISCORD_WEBHOOK_URL is not a https://discord.com/api/webhooks/... URL; "
+                                                "refusing to send alert data anywhere else")
         body = json.dumps(build_payload(alert), ensure_ascii=False).encode("utf-8")
         return post_with_retry(self._client, self._url, body, {"Content-Type": "application/json", "User-Agent": "marsadix"},
                                timeout=self._timeout, max_attempts=self._max_attempts, sleep=self._sleep)

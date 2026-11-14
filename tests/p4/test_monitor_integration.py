@@ -109,20 +109,19 @@ def test_no_alerts_persists_findings_but_sends_nothing(db):
 def test_channel_selection_and_unconfigured_channel_reported(db):
     seed_basic(db)
     client = FakeClient(HttpResponse(204))
-    st = settings(slack_webhook_url="https://hooks.slack.com/services/T/B/X")
-    s = run_matching(db, settings=st, client=client, sleep=Sleeper(), changed_cve_ids=["CVE-2021-41773"], channels=["discord", "telegram"],
-                     resolver=lambda h: ["93.184.216.34"])
+    s = run_matching(db, settings=settings(), client=client, sleep=Sleeper(), changed_cve_ids=["CVE-2021-41773"],
+                     channels=["discord", "telegram"])
     assert s.channels == ["discord"] and any("'telegram' is not configured" in f for f in s.failures)
     assert [c["url"] for c in client.calls] == [DISCORD]
 
 
 def test_multiple_channels(db):
     seed_basic(db)
-    client = FakeClient(HttpResponse(204))
-    st = settings(slack_webhook_url="https://hooks.slack.com/services/T/B/X", teams_webhook_url="https://x.webhook.office.com/a")
-    s = run_matching(db, settings=st, client=client, sleep=Sleeper(), changed_cve_ids=["CVE-2021-41773"], resolver=lambda h: ["93.184.216.34"])
-    assert s.channels == ["discord", "slack", "teams"] and s.alerts_sent == 3
-    assert db.execute("SELECT count(DISTINCT channel) FROM alerts").fetchone()[0] == 3
+    client = FakeClient(HttpResponse(204), HttpResponse(200, {}, '{"ok": true}'))
+    st = settings(telegram_bot_token="123:tok", telegram_chat_id="42")
+    s = run_matching(db, settings=st, client=client, sleep=Sleeper(), changed_cve_ids=["CVE-2021-41773"])
+    assert s.channels == ["discord", "telegram"] and s.alerts_sent == 2
+    assert db.execute("SELECT count(DISTINCT channel) FROM alerts").fetchone()[0] == 2
 
 
 def test_unknown_version_matches_low_confidence_stored_not_alerted(db):

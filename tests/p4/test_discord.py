@@ -88,3 +88,24 @@ def test_secret_never_in_results_or_repr(caplog):
 def test_not_configured():
     r = DiscordNotifier("").send(payload())
     assert r.skipped and not r.ok
+
+
+def test_alert_data_is_only_ever_sent_to_a_real_discord_webhook():
+    from marsadix.alerts.discord import is_discord_webhook_url
+    good = ["https://discord.com/api/webhooks/1/abc", "https://discordapp.com/api/webhooks/1/abc",
+            "https://ptb.discord.com/api/webhooks/1/abc", "https://canary.discord.com/api/webhooks/1/abc"]
+    bad = ["http://discord.com/api/webhooks/1/abc",              # not https
+           "https://evil.example/api/webhooks/1/abc",             # other host
+           "https://discord.com.evil.example/api/webhooks/1/abc",
+           "https://discord.com@evil.example/api/webhooks/1/abc",  # userinfo trick
+           "https://discord.com:8443/api/webhooks/1/abc",
+           "https://discord.com/other/path", "https://169.254.169.254/api/webhooks/1/a", "not a url", ""]
+    assert all(is_discord_webhook_url(u) for u in good)
+    assert not any(is_discord_webhook_url(u) for u in bad)
+
+
+def test_non_discord_url_is_refused_without_any_request():
+    client = FakeClient()
+    res = DiscordNotifier("https://evil.example/api/webhooks/1/abc", client=client, sleep=Sleeper()).send(payload())
+    assert not res.ok and "refusing" in res.error and client.calls == []
+    assert "evil.example" not in res.error                      # never echo the configured URL

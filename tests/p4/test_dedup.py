@@ -134,26 +134,27 @@ def test_unique_constraint_prevents_duplicate_rows(db):
 
 # ---- settings / dispatch -----------------------------------------------------
 def test_settings_env_and_describe_no_secrets():
-    env = {"DISCORD_WEBHOOK_URL": "https://d/SECRET1", "TELEGRAM_BOT_TOKEN": "tok", "TELEGRAM_CHAT_ID": "1",
-           "SMTP_HOST": "h", "SMTP_FROM": "a@b.c", "SMTP_TO": "x@y.z, q@y.z", "SMTP_PASSWORD": "PW", "SMTP_STARTTLS": "false",
-           "WEBHOOK_URL": "https://w/SECRET2", "MARSADIX_ALLOW_PRIVATE_WEBHOOKS": "1"}
+    env = {"DISCORD_WEBHOOK_URL": "https://d/SECRET1", "TELEGRAM_BOT_TOKEN": "tokSECRET", "TELEGRAM_CHAT_ID": "1",
+           # channels that no longer exist must be ignored, not half-configured
+           "SMTP_HOST": "h", "SMTP_FROM": "a@b.c", "SMTP_TO": "x@y.z", "WEBHOOK_URL": "https://w/", "SLACK_WEBHOOK_URL": "https://s/"}
     s = AlertSettings.from_env(env)
-    assert s.configured_channels() == ["discord", "telegram", "email", "webhook"]
-    assert s.smtp_to == ["x@y.z", "q@y.z"] and s.smtp_starttls is False and s.allow_private_webhooks and s.smtp_port == 587
+    assert s.configured_channels() == ["discord", "telegram"]
+    assert set(s.describe()) == {"discord", "telegram"}
     blob = repr(s) + str(s.describe())
-    assert "SECRET1" not in blob and "SECRET2" not in blob and "PW" not in blob.replace("PWD", "")
+    assert "SECRET1" not in blob and "tokSECRET" not in blob
 
 
 def test_settings_config_object_fallback_env_wins():
     class Cfg:
-        discord_webhook = "https://cfg"; telegram_bot_token = "t"; telegram_chat_id = "c"; webhook_url = "https://w"
+        discord_webhook = "https://cfg"; telegram_bot_token = "t"; telegram_chat_id = "c"; pass
     s = AlertSettings.from_env({"DISCORD_WEBHOOK_URL": "https://env"}, Cfg())
-    assert s.discord_webhook == "https://env" and s.telegram_bot_token == "t" and "webhook" in s.configured_channels()
+    assert s.discord_webhook == "https://env" and s.telegram_bot_token == "t" and s.configured_channels() == ["discord", "telegram"]
 
 
 def test_build_notifiers():
-    s = AlertSettings(discord_webhook="https://d", slack_webhook_url="https://s")
-    assert set(build_notifiers(s)) == {"discord", "slack"}
-    assert set(build_notifiers(s, ["discord", "telegram"])) == {"discord"}
-    with pytest.raises(UnknownChannel):
-        build_notifiers(s, ["fax"])
+    s = AlertSettings(discord_webhook="https://d")
+    assert set(build_notifiers(s)) == {"discord"}
+    assert set(build_notifiers(s, ["discord", "telegram"])) == {"discord"}      # unconfigured channel is just omitted
+    for gone in ("fax", "email", "webhook", "slack", "teams"):
+        with pytest.raises(UnknownChannel):
+            build_notifiers(s, [gone])
