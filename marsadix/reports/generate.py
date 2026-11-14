@@ -188,7 +188,8 @@ def _gather(conn, target: str, scan_id: Optional[int], out_dir: Optional[str] = 
 
 def _write_json(data: dict, out_dir: Path, target: str, scan_id: int) -> Path:
     path = out_dir / f"{_safe_filename_component(target)}_scan{scan_id}_report.json"
-    path.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+    public = {k: v for k, v in data.items() if not str(k).startswith("_")}     # drop internal HTML fragments
+    path.write_text(json.dumps(public, indent=2, default=str), encoding="utf-8")
     return path
 
 
@@ -1021,7 +1022,7 @@ def _render_html(data: dict) -> str:
 
   <section>
     <div class="cards">
-      <div class="card"><div class="num">{data['posture_score']}</div><div class="label">Posture score (preliminary)</div></div>
+      <div class="card"><div class="num">{data['posture_score']}</div><div class="label">{data.get('_posture_label', 'Posture score (preliminary)')}</div></div>
       <div class="card"><div class="num">{len(data['assets'])}</div><div class="label">Assets</div></div>
       <div class="card"><div class="num">{len(findings)}</div><div class="label">Findings</div></div>
       <div class="card"><div class="num">{sev_counts.get('critical',0) + sev_counts.get('high',0)}</div><div class="label">Critical + High</div></div>
@@ -1095,6 +1096,7 @@ def _render_html(data: dict) -> str:
       and whether it answers over HTTP — see the Assets table above.</p>
     </div>
   </section>
+{data.get('_p4_html', '')}
 </main>
 <script>{_JS}</script>
 </body>
@@ -1110,6 +1112,24 @@ def _write_html(data: dict, out_dir: Path, target: str, scan_id: int) -> Path:
 # --------------------------------------------------------------------------
 # entry point
 # --------------------------------------------------------------------------
+
+def _attach_p4(conn, data: dict, target: str) -> dict:
+    """Add Person 4's risk / top fixes / patterns / attack-surface score. Read-only, scoped to
+    this target; an optional section must never make the whole report fail."""
+    try:
+        from . import p4_sections
+        p4 = p4_sections.build_p4_report_data(conn, target)
+        data = p4_sections.augment_report_json(data, p4)
+        data["_p4_html"] = p4_sections.render_p4_html(p4)
+        # the real attack-surface score replaces the placeholder (see _preliminary_posture_score)
+        data["posture_score"] = int(round(p4["attack_surface"]["score"]))
+        data["_posture_label"] = "Attack surface score"
+    except ModuleNotFoundError:
+        pass
+    except Exception as exc:
+        print(f"warning: risk / attack-surface section skipped: {exc}", file=sys.stderr)
+    return data
+
 
 FORMATS = ("html", "json", "csv", "sarif", "pdf", "both", "all")
 
@@ -1132,6 +1152,7 @@ def generate_report(conn, target: str, fmt: str = "both", out_dir: str = "output
               f"Run `marsadix scan {target}` first.", file=sys.stderr)
         return 1
 
+    data = _attach_p4(conn, data, target)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     real_scan_id = data["scan"]["id"]

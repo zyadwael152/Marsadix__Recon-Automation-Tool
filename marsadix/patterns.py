@@ -406,18 +406,23 @@ def hunt(data: PatternData, rules: Iterable[Rule] = RULES) -> List[PatternFindin
     return sorted(out.values(), key=lambda f: (-SEVERITY_ORDER.get(f.severity, 0), f.host, f.rule_id, f.target))
 
 
-def load_pattern_data(conn: sqlite3.Connection, now: Optional[datetime] = None) -> PatternData:
-    return PatternData(assets=p4data.load_assets(conn), services=p4data.load_services(conn),
-                       technologies=p4data.load_technologies(conn), web_items=p4data.load_web_items(conn),
-                       findings=p4data.load_findings(conn), now=now or datetime.now(timezone.utc))
+def load_pattern_data(conn: sqlite3.Connection, now: Optional[datetime] = None, target: str = "*") -> PatternData:
+    ids = p4data.target_scan_ids(conn, target)
+    sc = lambda rows: p4data.scope_rows(rows, ids)
+    return PatternData(assets=sc(p4data.load_assets(conn)), services=sc(p4data.load_services(conn)),
+                       technologies=sc(p4data.load_technologies(conn)), web_items=sc(p4data.load_web_items(conn)),
+                       findings=sc(p4data.load_findings(conn)), now=now or datetime.now(timezone.utc))
 
 
 def persist_findings(conn: sqlite3.Connection, findings: Iterable[PatternFinding], *, monitor_run_id: Optional[int] = None) -> Dict[str, int]:
-    created = updated = 0
-    default_scan = p4data.latest_scan_id(conn)
+    created = updated = skipped = 0
     for f in findings:
+        scan_id = f.scan_id if f.scan_id is not None else p4data.scan_for_host(conn, f.host)
+        if scan_id is None:           # no scan observed this host: do not guess one (could be another target's)
+            skipped += 1
+            continue
         res = p4data.upsert_finding(conn, f.dedup_key, {
-            "scan_id": f.scan_id if f.scan_id is not None else default_scan, "host": f.host, "title": f.title,
+            "scan_id": scan_id, "host": f.host, "title": f.title,
             "severity": f.severity, "status": f.status, "category": "pattern", "source": "pattern", "rule_id": f.rule_id,
             "owasp": f.owasp, "owasp_category": p4data.owasp_full(f.owasp), "source_reference": "Marsadix misconfiguration pattern", "remediation_key": f.remediation_key, "confidence": f.confidence,
             "evidence": "\n".join(f.evidence)[:8000], "description": "\n".join(f.evidence)[:2000], "template_id": f.rule_id,
@@ -425,7 +430,7 @@ def persist_findings(conn: sqlite3.Connection, findings: Iterable[PatternFinding
         created += res["created"]
         updated += not res["created"]
     conn.commit()
-    return {"created": created, "updated": updated}
+    return {"created": created, "updated": updated, "skipped": skipped}
 
 
 def run_patterns(conn: sqlite3.Connection, *, persist: bool = True, now: Optional[datetime] = None) -> List[PatternFinding]:

@@ -126,6 +126,18 @@ def build_parser() -> argparse.ArgumentParser:
     sc = sub.add_parser("scope", help="test hosts against a scope file")
     sc.add_argument("file", help="scope.txt")
     sc.add_argument("hosts", nargs="+", help="hosts / IPs / URLs to test")
+
+    # Person 4: risk / patterns / attack-surface / remediation + extra monitor flags.
+    # Optional on purpose: a problem inside that package must not take every other command down.
+    try:
+        from .p4_cli import add_monitor_arguments, register as register_p4
+        add_monitor_arguments(m)
+        register_p4(sub, lambda a: a._conn)
+    except ModuleNotFoundError as exc:
+        if exc.name not in ("marsadix.p4_cli",):
+            print(f"warning: Person 4 commands unavailable: {exc}", file=sys.stderr)
+    except Exception as exc:
+        print(f"warning: Person 4 commands unavailable: {exc}", file=sys.stderr)
     return p
 
 
@@ -179,8 +191,42 @@ def _db_command(path: str, what: str, cfg: Config, **kwargs):
 
 
 def cmd_monitor(a, cfg: Config) -> int:
-    return _db_command("marsadix.monitor.runner:run", "monitor", cfg,
-                       config=cfg, dry_run=a.dry_run, since=a.since)
+    """Sync NVD/KEV/EPSS (monitor/runner.py), then match the CVEs against stored technologies and
+    alert (p4_cli.monitor_post_sync). Matching is skipped when the sync failed or was skipped, so it
+    never runs on stale data."""
+    import inspect
+    run = load_callable("marsadix.monitor.runner:run")
+    if run is None:
+        return _missing("marsadix.monitor.runner:run", "monitor")
+    post = load_callable("marsadix.p4_cli:monitor_post_sync")
+    conn = db.connect(cfg.db_path)
+    try:
+        db.init_db(conn)
+        kwargs = dict(conn=conn, config=cfg, dry_run=a.dry_run, since=a.since)
+        if post is not None and "return_summary" in inspect.signature(run).parameters:
+            kwargs["return_summary"] = True
+        result = run(**kwargs)
+        if not isinstance(result, tuple):                  # runner without the summary hook
+            return result if isinstance(result, int) else 0
+        rc, summary = result
+        if rc != 0:
+            return rc
+        post(conn, a, summary, config=cfg)
+        return 0
+    finally:
+        conn.close()
+
+
+def cmd_p4(a, cfg: Config) -> int:
+    """risk / patterns / attack-surface / remediation (handlers live in p4_cli.py)."""
+    conn = db.connect(cfg.db_path)
+    try:
+        db.init_db(conn)
+        a._conn = conn
+        rc = a.func(a)
+    finally:
+        conn.close()
+    return rc if isinstance(rc, int) else 0
 
 
 # 🆕 R14: Command implementation for CT stream monitoring
@@ -286,6 +332,13 @@ def cmd_doctor(a, cfg: Config) -> int:
     for name, key, var in sources:
         print(f"  [{'KEY SET' if key else 'no key '}] {name:<15} ({var})")
     print("  A set key is only sent to its own provider. 'no key' = skipped (AlienVault OTX still runs, anonymously and rate-limited).")
+    try:
+        from .p4_cli import doctor_lines
+        print("\nAlert channels:")
+        for line in doctor_lines():
+            print(f"  {line}")
+    except Exception:
+        pass
     print(f"\n{len(rows) - missing}/{len(rows)} tools found."
           f" API key: {'set' if cfg.nvd_api_key else 'NOT set (NVD_API_KEY in .env)'}."
           f" Discord webhook: {'set' if cfg.discord_webhook else 'NOT set (DISCORD_WEBHOOK_URL in .env)'}.")
@@ -303,7 +356,8 @@ def cmd_scope(a, cfg: Config) -> int:
 COMMANDS = {"scan": cmd_scan, "monitor": cmd_monitor, "ct-monitor": cmd_ct_monitor,
             "diff": cmd_diff, "snapshots": cmd_snapshots, "report": cmd_report,
             "graph": cmd_graph, "timemachine": cmd_timemachine, "investigate": cmd_investigate,
-            "skills": cmd_skills, "benchmark": cmd_benchmark, "doctor": cmd_doctor, "scope": cmd_scope}
+            "skills": cmd_skills, "benchmark": cmd_benchmark, "doctor": cmd_doctor, "scope": cmd_scope,
+            "risk": cmd_p4, "patterns": cmd_p4, "attack-surface": cmd_p4, "remediation": cmd_p4}
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

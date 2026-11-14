@@ -18,10 +18,11 @@ __all__ = ["collect_risked_findings", "build_p4_report_data", "render_p4_html", 
 _SARIF_LEVEL = {"critical": "error", "high": "error", "medium": "warning", "low": "note", "info": "note"}
 
 
-def collect_risked_findings(conn: sqlite3.Connection) -> List[RiskedFinding]:
+def collect_risked_findings(conn: sqlite3.Connection, target: str = "*") -> List[RiskedFinding]:
     ctx = p4data.asset_context(conn)
     out = []
-    for row in p4data.load_findings(conn, source="monitor", open_only=True):
+    rows = p4data.scope_rows(p4data.load_findings(conn, source="monitor", open_only=True), p4data.target_scan_ids(conn, target))
+    for row in rows:
         if not row.get("cve_id"):
             continue
         rem = remediation_db.lookup(conn, {"cve_id": row["cve_id"], "title": row.get("title"), "description": row.get("description"),
@@ -32,11 +33,11 @@ def collect_risked_findings(conn: sqlite3.Connection) -> List[RiskedFinding]:
 
 
 def build_p4_report_data(conn: sqlite3.Connection, target: str = "*", top: int = 10, record: bool = False) -> Dict[str, Any]:
-    risked = collect_risked_findings(conn)
+    risked = collect_risked_findings(conn, target)
     levels: Dict[str, int] = {}
     for f in risked:
         levels[f.risk.level] = levels.get(f.risk.level, 0) + 1
-    found = pat.hunt(pat.load_pattern_data(conn))
+    found = pat.hunt(pat.load_pattern_data(conn, target=target))
     patterns_out = []
     for p in found:
         rem = remediation_db.lookup(conn, {"skill": p.remediation_key, "owasp": p.owasp, "title": p.title})

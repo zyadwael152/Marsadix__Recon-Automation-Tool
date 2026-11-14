@@ -196,7 +196,6 @@ def run_matching(conn: sqlite3.Connection, *, settings: Optional[AlertSettings] 
         # ---- findings + alerts -----------------------------------------------
         min_conf = Confidence.coerce(settings.min_confidence.upper() if isinstance(settings.min_confidence, str) else settings.min_confidence)
         current_keys = set()
-        default_scan = p4data.latest_scan_id(work)
         for r in matches:
             a, cve = r.asset, r.cve
             conf = assess(r).level
@@ -207,9 +206,9 @@ def run_matching(conn: sqlite3.Connection, *, settings: Optional[AlertSettings] 
                                                "product": product, "cwe": cve.cwe, "owasp": "A06:2021"})
             key = f"cvefinding:{cve.id}|host:{a.host.lower()}|product:{product.lower()}"
             current_keys.add(key)
-            scan_id = a.scan_id if a.scan_id is not None else default_scan
+            scan_id = a.scan_id if a.scan_id is not None else p4data.scan_for_host(work, a.host)
             if scan_id is None:
-                summary.failures.append(f"{cve.id} on {a.host}: no scan to attach the finding to")
+                summary.failures.append(f"{cve.id} on {a.host}: no scan has observed this host, finding not stored")
                 continue
             res = p4data.upsert_finding(work, key, {
                 "scan_id": scan_id, "host": a.host, "title": f"{cve.id} in {a.name or product} {a.version or ''}".strip(),

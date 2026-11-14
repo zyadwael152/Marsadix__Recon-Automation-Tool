@@ -123,7 +123,15 @@ def migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
         if has_table(conn, "alerts"):
             conn.execute("CREATE INDEX IF NOT EXISTS ix_alerts_group ON alerts(group_key)")
         if has_table(conn, "findings"):
-            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_findings_dedup ON findings(dedup_key) WHERE dedup_key IS NOT NULL")
+            # dedup_key is only unique PER SCAN for scanner findings (UNIQUE(scan_id, dedup_key) in marsadix.db), so a
+            # global unique index fails on any database that was scanned twice. Only the findings Person 4 itself writes
+            # (one row per key, refreshed in place) get a unique key, scoped by source.
+            conn.execute("DROP INDEX IF EXISTS ux_findings_dedup")
+            conn.execute("""DELETE FROM findings WHERE source IN ('monitor','pattern') AND dedup_key IS NOT NULL
+                            AND id NOT IN (SELECT MIN(id) FROM findings WHERE source IN ('monitor','pattern')
+                                           AND dedup_key IS NOT NULL GROUP BY source, dedup_key)""")   # derived rows, regenerated every run
+            conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS ux_findings_p4_dedup ON findings(source, dedup_key)
+                            WHERE source IN ('monitor','pattern') AND dedup_key IS NOT NULL""")
             conn.execute("CREATE INDEX IF NOT EXISTS ix_findings_cve ON findings(cve_id)")
         # keep any repo-level version bookkeeping in sync
         for table, col in (("schema_version", "version"), ("schema_meta", "version")):

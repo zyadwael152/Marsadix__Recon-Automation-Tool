@@ -145,11 +145,15 @@ def register(subparsers: Any, get_conn: Callable[[argparse.Namespace], sqlite3.C
 
 
 def add_monitor_arguments(parser: argparse.ArgumentParser) -> None:
-    """Flags to add to the existing ``monitor`` command (``--since`` already exists there)."""
-    parser.add_argument("--dry-run", action="store_true", help="match and report, but write nothing and send nothing")
-    parser.add_argument("--all", dest="all_cves", action="store_true", help="re-match all stored CVEs, not only new ones")
-    parser.add_argument("--no-alerts", action="store_true", help="match and persist findings but do not send alerts")
-    parser.add_argument("--channel", action="append", choices=CHANNELS, help="restrict alert channels (repeatable)")
+    """Flags to add to the existing ``monitor`` command. Flags the parser already has (``--dry-run`` and
+    ``--since`` exist in cli.py) are skipped: argparse raises on a duplicate option string."""
+    def add(*flags, **kw):
+        if not any(f in parser._option_string_actions for f in flags):
+            parser.add_argument(*flags, **kw)
+    add("--dry-run", action="store_true", help="match and report, but write nothing and send nothing")
+    add("--all", dest="all_cves", action="store_true", help="re-match all stored CVEs, not only new ones")
+    add("--no-alerts", action="store_true", help="match and persist findings but do not send alerts")
+    add("--channel", action="append", choices=CHANNELS, help="restrict alert channels (repeatable)")
 
 
 def monitor_post_sync(conn: sqlite3.Connection, args: argparse.Namespace, sync_result: Any = None, *, config: Any = None,

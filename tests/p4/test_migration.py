@@ -50,10 +50,22 @@ def test_remediation_constraints(db):
 
 
 def test_findings_dedup_unique_index(db):
-    sid = seed_basic(db)
-    db.execute("INSERT INTO findings(scan_id,title,dedup_key) VALUES (?,?,?)", (sid, "a", "k"))
-    db.execute("INSERT INTO findings(scan_id,title) VALUES (?,?)", (sid, "no key 1"))
-    db.execute("INSERT INTO findings(scan_id,title) VALUES (?,?)", (sid, "no key 2"))
+    """One row per key for the findings Person 4 writes (monitor / pattern). Scanner findings legitimately
+    repeat the same dedup_key in every scan (UNIQUE(scan_id, dedup_key) in marsadix.db), so they are not
+    constrained - a global unique index made every P4 command crash on a database that had been rescanned."""
     import pytest
+    sid = seed_basic(db)
+
+    def ins(title, source, key=None):
+        db.execute("INSERT INTO findings(scan_id,title,source,dedup_key) VALUES (?,?,?,?)", (sid, title, source, key))
+
+    ins("a", "monitor", "k")
+    ins("no key 1", "monitor")
+    ins("no key 2", "monitor")                       # NULL keys never collide
+    ins("same key, other source", "pattern", "k")    # uniqueness is per source
+    ins("scanner copy 1", "nuclei", "k")
+    ins("scanner copy 2", "nuclei", "k")             # rescans repeat the key: must be allowed
     with pytest.raises(sqlite3.IntegrityError):
-        db.execute("INSERT INTO findings(scan_id,title,dedup_key) VALUES (?,?,?)", (sid, "b", "k"))
+        ins("b", "monitor", "k")
+    with pytest.raises(sqlite3.IntegrityError):
+        ins("c", "pattern", "k")

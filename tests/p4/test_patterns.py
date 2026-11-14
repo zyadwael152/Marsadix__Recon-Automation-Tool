@@ -220,7 +220,7 @@ def test_db_roundtrip_dedup_and_status_preserved(db):
     assert db.execute("SELECT status FROM findings WHERE rule_id='exposed-service-port'").fetchone()[0] == "accepted"
     row = db.execute("SELECT category, source, owasp, remediation_key, first_seen, last_seen FROM findings WHERE rule_id='exposed-sensitive-file'").fetchone()
     assert row[0] == "pattern" and row[1] == "pattern" and row[2] == "A05:2021" and row[4] and row[5]
-    assert persist_findings(db, []) == {"created": 0, "updated": 0}
+    assert persist_findings(db, []) == {"created": 0, "updated": 0, "skipped": 0}
 
 
 def test_loader_uses_only_latest_scan_per_host(db):

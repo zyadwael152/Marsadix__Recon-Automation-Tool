@@ -104,7 +104,10 @@ def upsert_finding(conn: sqlite3.Connection, dedup_key: str, values: Dict[str, A
     ``first_seen``; scores/evidence are refreshed.  Returns ``{"id", "created"}``.
     """
     ts = now_iso()
-    existing = fetch_one(conn, "SELECT id FROM findings WHERE dedup_key=?", (dedup_key,))
+    src = values.get("source")
+    # scanner findings share a dedup_key across scans, so the lookup must stay inside the writer's own source
+    existing = (fetch_one(conn, "SELECT id FROM findings WHERE dedup_key=? AND source=?", (dedup_key, src)) if src
+                else fetch_one(conn, "SELECT id FROM findings WHERE dedup_key=?", (dedup_key,)))
     if existing:
         refresh = {k: v for k, v in values.items() if k not in ("status", "first_seen", "created_at", "scan_id")}
         refresh["last_seen"] = ts
@@ -132,3 +135,34 @@ def is_rollup(row) -> bool:
     """The 'outdated-component' pattern finding only summarises CVE findings that already exist;
     counting both would double-count the same exposure in the attack surface score."""
     return str(row.get("source") or "") == "pattern" and str(row.get("template_id") or row.get("rule_id") or "") == "outdated-component"
+
+
+def target_scan_ids(conn, target):
+    """Scan ids of one target, or None for "no filtering" ('*' / empty). A target that was never
+    scanned gives an empty set, so a report for it can never show another target's data."""
+    if not target or target == "*" or not has_table(conn, "scans"):
+        return None
+    return {int(r["id"]) for r in fetch_all(conn, "SELECT id FROM scans WHERE target=?", (target,))}
+
+
+def scope_rows(rows, scan_ids):
+    return rows if scan_ids is None else [r for r in rows if r.get("scan_id") in scan_ids]
+
+
+def scan_for_host(conn, host):
+    """Newest scan that actually observed ``host`` (asset or technology row), or None.
+
+    Used when a finding has no scan of its own. Never fall back to "the newest scan in the database":
+    with several targets in one DB that can belong to a different target, so the finding would show up
+    in the wrong report."""
+    host = str(host or "").strip().lower()
+    if not host:
+        return None
+    best = None
+    for table in ("assets", "technologies"):
+        if not has_table(conn, table):
+            continue
+        r = fetch_one(conn, f'SELECT max(scan_id) AS m FROM "{table}" WHERE lower(host)=?', (host,))
+        if r and r["m"] is not None:
+            best = max(best or 0, int(r["m"]))
+    return best
