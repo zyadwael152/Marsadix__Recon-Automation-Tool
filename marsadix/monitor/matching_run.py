@@ -67,6 +67,7 @@ class MatchRunSummary:
     alerts_failed: int = 0
     alerts_deduplicated: int = 0
     alerts_below_threshold: int = 0
+    alerts_deferred: int = 0
     channels: List[str] = field(default_factory=list)
     failures: List[str] = field(default_factory=list)
     attack_surface: Optional[Dict[str, Any]] = None
@@ -85,6 +86,8 @@ class MatchRunSummary:
             f"channels:                {', '.join(self.channels) or 'none'}",
             f"failures:                {len(self.failures) + self.alerts_failed}",
         ]
+        if self.alerts_deferred:
+            out.append(f"alerts deferred:        {self.alerts_deferred} (per-run cap; sent on the next run, most important first)")
         if self.attack_surface:
             a = self.attack_surface
             out.append(f"attack surface score:    {a['score']:.1f}/100 ({a['trend']}"
@@ -196,6 +199,7 @@ def run_matching(conn: sqlite3.Connection, *, settings: Optional[AlertSettings] 
         # ---- findings + alerts -----------------------------------------------
         min_conf = Confidence.coerce(settings.min_confidence.upper() if isinstance(settings.min_confidence, str) else settings.min_confidence)
         current_keys = set()
+        pending = []
         for r in matches:
             a, cve = r.asset, r.cve
             conf = assess(r).level
@@ -232,17 +236,34 @@ def run_matching(conn: sqlite3.Connection, *, settings: Optional[AlertSettings] 
                 cvss=cve.cvss, epss=cve.epss, kev=cve.kev, confidence=conf.label, priority_level=pr.level.label,
                 priority_score=pr.score, risk_score=risk.score, remediation_title=rem.title, remediation_text=rem.fix_text,
                 description=cve.description, reasons=list(pr.reasons))
+            pending.append(payload)
+
+        # Most important first, at most `max_alerts_per_run` DISTINCT alerts per run. A low confidence threshold on
+        # version-less technologies can match thousands of CVEs, and that must never flood Discord/Telegram. The ones
+        # that are held back are not recorded as sent, so the next run sends them (highest priority first).
+        pending.sort(key=lambda p: (-p.priority_score, p.cve_id, p.host))
+        max_alerts = max(1, int(getattr(settings, "max_alerts_per_run", 25)))
+        distinct = 0
+        for payload in pending:
+            if distinct >= max_alerts:
+                summary.alerts_deferred += 1
+                continue
+            attempted = False
             for ch in sorted(notifiers):
                 out = process_alert(work, payload, ch, notifiers[ch], dry_run=dry_run)
                 if out is None:
                     summary.alerts_deduplicated += 1
-                elif dry_run:
+                    continue
+                attempted = True
+                if dry_run:
                     summary.alerts_would_send += 1
                 elif out["result"].ok:
                     summary.alerts_sent += 1
                 else:
                     summary.alerts_failed += 1
-                    summary.failures.append(f"alert {cve.id} on {a.host} via {ch}: {out['result'].error}")
+                    summary.failures.append(f"alert {payload.cve_id} on {payload.host} via {ch}: {out['result'].error}")
+            if attempted:
+                distinct += 1
         work.commit()
 
         if all_cves:

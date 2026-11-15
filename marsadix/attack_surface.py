@@ -29,10 +29,13 @@ from . import p4data
 from .dbutil import fetch_all, fetch_one, has_table
 
 __all__ = ["AttackSurfaceInputs", "AttackSurfaceScore", "compute_score", "collect_inputs", "record_score",
-           "history", "latest_score", "posture_for_report", "SEVERITY_WEIGHT", "TREND_THRESHOLD"]
+           "history", "latest_score", "posture_for_report", "SEVERITY_WEIGHT", "TREND_THRESHOLD", "CONFIDENCE_WEIGHT"]
 
 SEVERITY_WEIGHT = {"critical": 8.0, "high": 4.0, "medium": 1.5, "low": 0.5, "info": 0.0}
 TREND_THRESHOLD = 2.0
+# A CVE match is only as certain as its version comparison. With no version (httpx only knows the product) every CVE
+# for that product "matches" at low confidence, so it must not weigh like a confirmed exposure.
+CONFIDENCE_WEIGHT = {"high": 1.0, "medium": 0.6, "low": 0.2}
 CLOSED = ("fixed", "resolved", "closed", "false_positive", "accepted")
 
 
@@ -79,12 +82,14 @@ def compute_score(inputs: AttackSurfaceInputs, previous: Optional[Dict[str, Any]
     for f in open_f:
         risk = f.get("risk")
         risk = 50.0 if risk is None else max(0.0, min(100.0, float(risk)))
-        raw += SEVERITY_WEIGHT.get(str(f.get("severity", "info")).lower(), 0.0) * (0.5 + risk / 100.0)
+        raw += (SEVERITY_WEIGHT.get(str(f.get("severity", "info")).lower(), 0.0) * (0.5 + risk / 100.0)
+                * float(f.get("confidence_weight", 1.0)))
     p_find = 55.0 * (1.0 - math.exp(-raw / 30.0))
-    kev_ext = sum(1 for f in open_f if f.get("kev") and f.get("internet_facing", True))
-    kev_int = sum(1 for f in open_f if f.get("kev") and not f.get("internet_facing", True))
+    w = lambda f: float(f.get("confidence_weight", 1.0))
+    kev_ext = sum(w(f) for f in open_f if f.get("kev") and f.get("internet_facing", True))
+    kev_int = sum(w(f) for f in open_f if f.get("kev") and not f.get("internet_facing", True))
     p_kev = min(20.0, 7.0 * kev_ext + 3.0 * kev_int)
-    unresolved = sum(1 for f in open_f if (f.get("risk") or 0) >= 70)
+    unresolved = sum(w(f) for f in open_f if (f.get("risk") or 0) >= 70)
     p_unres = min(10.0, 2.0 * unresolved)
     p_exp = min(5.0, 0.25 * inputs.internet_assets)
     cov = (inputs.versioned_technologies / inputs.technologies) if inputs.technologies else 1.0
@@ -99,15 +104,19 @@ def compute_score(inputs: AttackSurfaceInputs, previous: Optional[Dict[str, Any]
     if p_find:
         reasons.append(f"-{p_find:.1f}: {len(open_f)} open finding(s), weighted severity/risk {raw:.1f}")
     if p_kev:
-        reasons.append(f"-{p_kev:.1f}: {kev_ext} internet-facing and {kev_int} internal known-exploited (KEV) finding(s)")
+        reasons.append(f"-{p_kev:.1f}: {kev_ext:g} internet-facing and {kev_int:g} internal known-exploited (KEV) finding(s)")
     if p_unres:
-        reasons.append(f"-{p_unres:.1f}: {unresolved} unresolved finding(s) with risk >= 70")
+        reasons.append(f"-{p_unres:.1f}: {unresolved:g} unresolved finding(s) with risk >= 70")
     if p_exp:
         reasons.append(f"-{p_exp:.1f}: {inputs.internet_assets} internet-facing asset(s)")
     if p_cov:
         reasons.append(f"-{p_cov:.1f}: version coverage {cov:.0%} ({inputs.versioned_technologies}/{inputs.technologies} technologies)")
     if p_drift:
         reasons.append(f"-{p_drift:.1f}: {drift} new finding/host/port since the previous run")
+    discounted = sum(1 for f in open_f if w(f) < 1.0)
+    if discounted:
+        reasons.append(f"note: {discounted} CVE match(es) count at reduced weight (version unknown or unverified); "
+                       f"a --mode standard scan (nmap -sV) gives versions and confirms them")
     score = round(max(0.0, min(100.0, 100.0 - sum(pens.values()))), 1)
     if not reasons:
         reasons.append("no open findings or exposure penalties")
@@ -119,6 +128,13 @@ def compute_score(inputs: AttackSurfaceInputs, previous: Optional[Dict[str, Any]
     else:
         reasons.append(f"{trend}: {prev:.1f} -> {score:.1f} ({delta:+.1f})")
     return AttackSurfaceScore(score, prev, delta, trend, reasons, {k: round(v, 2) for k, v in pens.items()}, _grade(score))
+
+
+def _confidence_weight(f: Dict[str, Any]) -> float:
+    """Only CVE matches (source 'monitor') carry a match confidence; scanner findings keep full weight."""
+    if str(f.get("source") or "") != "monitor":
+        return 1.0
+    return CONFIDENCE_WEIGHT.get(str(f.get("confidence") or "").lower(), CONFIDENCE_WEIGHT["medium"])
 
 
 def collect_inputs(conn: sqlite3.Connection, target: str = "*") -> AttackSurfaceInputs:
@@ -149,7 +165,8 @@ def collect_inputs(conn: sqlite3.Connection, target: str = "*") -> AttackSurface
         is_open = str(f.get("status") or "open").lower() not in CLOSED
         host = str(f.get("host") or "")
         inp.findings.append({"key": key, "severity": str(f.get("severity") or "info").lower(), "risk": f.get("risk_score"),
-                             "kev": bool(int(f.get("kev") or 0)), "internet_facing": facing.get(host, True), "open": is_open})
+                             "kev": bool(int(f.get("kev") or 0)), "internet_facing": facing.get(host, True), "open": is_open,
+                             "confidence_weight": _confidence_weight(f)})
         if is_open:
             inp.finding_keys.append(key)
     return inp

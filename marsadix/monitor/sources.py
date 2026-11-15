@@ -1,6 +1,7 @@
 """Passive CVE intelligence clients: NVD, CISA KEV and FIRST EPSS."""
 from __future__ import annotations
 import json
+import sys
 import time
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlencode
@@ -11,9 +12,14 @@ NVD = 'https://services.nvd.nist.gov/rest/json/cves/2.0'
 KEV = 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json'
 EPSS = 'https://api.first.org/data/v1/epss'
 
+def progress(msg):
+    """Progress goes to stderr so stdout stays clean for the JSON summary."""
+    print(msg, file=sys.stderr, flush=True)
+
+
 RETRY_CODES = (429, 500, 502, 503, 504)
 
-def request_json(url, headers=None, retries=3, timeout=30, extra_retry=()):
+def request_json(url, headers=None, retries=3, timeout=30, extra_retry=(), backoff=2):
     """Retry transient errors, obey Retry-After, fail closed on malformed data.
 
     ``extra_retry``: additional HTTP codes worth retrying for one provider (NVD answers 403
@@ -29,10 +35,13 @@ def request_json(url, headers=None, retries=3, timeout=30, extra_retry=()):
                 raise
             delay = exc.headers.get('Retry-After', '')
             try: wait = min(120, max(0, int(delay)))
-            except ValueError: wait = 30 if exc.code in extra_retry else min(60, 2 ** attempt)
+            except ValueError: wait = 30 if exc.code in extra_retry else min(60, backoff * 2 ** attempt)
+            reason = f'HTTP {exc.code}'
         except (URLError, TimeoutError):
             if attempt == retries: raise
-            wait = min(60, 2 ** attempt)
+            wait = min(60, backoff * 2 ** attempt)
+            reason = 'network error / timeout'
+        progress(f'  {reason}; retrying in {wait}s (attempt {attempt + 1}/{retries})...')
         time.sleep(wait)
 
 def parse_nvd(item):
@@ -57,7 +66,7 @@ def parse_nvd(item):
                 cpe_matches=[] if rejected else c.get('configurations', []),
                 references=[r['url'] for r in c.get('references', []) if r.get('url')])
 
-def fetch_nvd(start, end, api_key='', page_size=2000):
+def fetch_nvd(start, end, api_key='', page_size=1000):
     """Yield NVD CVEs in lastModified windows, paginating until complete."""
     if end <= start: return
     headers = {'apiKey': api_key} if api_key else {}
@@ -69,10 +78,12 @@ def fetch_nvd(start, end, api_key='', page_size=2000):
                 'resultsPerPage': min(2000, page_size)}
         index = 0
         while True:
-            payload = request_json(NVD + '?' + urlencode({**base, 'startIndex': index}), headers, extra_retry=(403,))
+            payload = request_json(NVD + '?' + urlencode({**base, 'startIndex': index}), headers,
+                                   retries=6, timeout=60, extra_retry=(403,), backoff=5)
             records = payload.get('vulnerabilities', [])
             for record in records: yield parse_nvd(record)
             index += len(records)
+            progress(f"  NVD: {min(index, int(payload.get('totalResults', 0)))}/{int(payload.get('totalResults', 0))} records")
             # Sleep after EVERY request (also the last page of a window), otherwise the first
             # request of the next 119-day window follows immediately and trips NVD's rate limit.
             time.sleep(.6 if api_key else 6)
@@ -90,6 +101,8 @@ def fetch_epss(ids, batch_size=100):
     for i in range(0, len(unique), batch_size):
         chunk = unique[i:i+batch_size]
         payload = request_json(EPSS + '?' + urlencode({'cve': ','.join(chunk)}))
+        if len(unique) > batch_size * 5 and (i // batch_size) % 10 == 0:
+            progress(f'  EPSS: {min(i + batch_size, len(unique))}/{len(unique)}')
         for record in payload.get('data', []):
             try:
                 value = float(record['epss'])

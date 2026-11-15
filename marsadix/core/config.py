@@ -50,6 +50,10 @@ ENV_MAP = {
     # This is the env var *name*, not a secret value.
     "TELEGRAM_BOT_TOKEN": "telegram_bot_token",  # nosec B105
     "TELEGRAM_CHAT_ID": "telegram_chat_id",
+    # When an alert is sent (M12): lower the confidence/priority bar, cap how many go out per run
+    "MARSADIX_ALERT_MIN_CONFIDENCE": "alert_min_confidence",
+    "MARSADIX_ALERT_MIN_PRIORITY": "alert_min_priority",
+    "MARSADIX_ALERT_MAX_PER_RUN": "alert_max_per_run",
 }
 
 
@@ -87,6 +91,9 @@ class Config:
     discord_webhook: str = field(default="", repr=False)
     telegram_bot_token: str = field(default="", repr=False)
     telegram_chat_id: str = field(default="", repr=False)
+    alert_min_confidence: str = ""   # low | medium | high   ("" = medium)
+    alert_min_priority: str = ""     # low | medium | high | critical   ("" = high)
+    alert_max_per_run: str = ""      # ("" = 25)
 
     def validate(self) -> None:
         if self.max_depth < 0:

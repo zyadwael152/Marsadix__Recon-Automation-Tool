@@ -27,6 +27,31 @@ def _bool(v: Any, default: bool) -> bool:
     return str(v).strip().lower() in ("1", "true", "yes", "on")
 
 
+def _choice(value: Any, allowed: tuple, default: str, name: str) -> str:
+    v = str(value).strip().lower()
+    if v in allowed:
+        return v
+    import logging
+    logging.getLogger(__name__).warning("%s=%r is not one of %s; using %r", name, value, "/".join(allowed), default)
+    return default
+
+
+def _positive_int(value: Any, default: int, name: str) -> int:
+    try:
+        n = int(str(value).strip())
+        if n >= 1:
+            return n
+    except (TypeError, ValueError):
+        pass
+    import logging
+    logging.getLogger(__name__).warning("%s=%r is not a positive integer; using %d", name, value, default)
+    return default
+
+
+_CONFIDENCES = ("low", "medium", "high")
+_PRIORITIES = ("low", "medium", "high", "critical")
+
+
 @dataclass
 class AlertSettings:
     discord_webhook: str = field(default="", repr=False)
@@ -34,6 +59,7 @@ class AlertSettings:
     telegram_chat_id: str = field(default="", repr=False)
     min_confidence: str = "medium"
     min_priority: str = "high"
+    max_alerts_per_run: int = 25
 
     @classmethod
     def from_env(cls, env: Optional[Mapping[str, str]] = None, config: Any = None) -> "AlertSettings":
@@ -50,8 +76,12 @@ class AlertSettings:
             discord_webhook=str(pick(("DISCORD_WEBHOOK_URL", "DISCORD_WEBHOOK"), "discord_webhook")),
             telegram_bot_token=str(pick(("TELEGRAM_BOT_TOKEN",), "telegram_bot_token")),
             telegram_chat_id=str(pick(("TELEGRAM_CHAT_ID",), "telegram_chat_id")),
-            min_confidence=str(env.get("MARSADIX_ALERT_MIN_CONFIDENCE", "medium")).lower(),
-            min_priority=str(env.get("MARSADIX_ALERT_MIN_PRIORITY", "high")).lower(),
+            min_confidence=_choice(pick(("MARSADIX_ALERT_MIN_CONFIDENCE",), "alert_min_confidence", "medium"),
+                                   _CONFIDENCES, "medium", "MARSADIX_ALERT_MIN_CONFIDENCE"),
+            min_priority=_choice(pick(("MARSADIX_ALERT_MIN_PRIORITY",), "alert_min_priority", "high"),
+                                 _PRIORITIES, "high", "MARSADIX_ALERT_MIN_PRIORITY"),
+            max_alerts_per_run=_positive_int(pick(("MARSADIX_ALERT_MAX_PER_RUN",), "alert_max_per_run", 25), 25,
+                                             "MARSADIX_ALERT_MAX_PER_RUN"),
         )
 
     def configured_channels(self) -> List[str]:

@@ -6,7 +6,7 @@ import logging
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
-from .sources import fetch_nvd, fetch_kev, fetch_epss
+from .sources import fetch_nvd, fetch_kev, fetch_epss, progress
 from .. import db
 from ..core.config import load_config
 
@@ -71,6 +71,7 @@ def synchronize(conn, config, dry_run=False, since=None, now=None):
 
 def _synchronize(conn, config, dry_run, start, now):
     changed_ids = set()
+    progress(f'NVD: fetching CVEs modified since {start:%Y-%m-%d %H:%M} UTC (the first run can take several minutes)...')
     for item in fetch_nvd(start, now, getattr(config, 'nvd_api_key', '')):
         conn.execute('INSERT OR REPLACE INTO temp.nvd_stage VALUES (?,?,?,?,?,?,?,?)',
                      (item['cve_id'], item['description'], item['cvss_score'], item['severity'],
@@ -78,10 +79,13 @@ def _synchronize(conn, config, dry_run, start, now):
                       json.dumps(item['references'])))
         changed_ids.add(item['cve_id'])
     conn.commit()   # flush staging and drop the implicit transaction so no read lock is held while on the network
+    progress(f'NVD: {len(changed_ids)} CVE(s) received')
     kev = fetch_kev()
+    progress(f'CISA KEV: {len(kev)} entries')
     if not kev:
         raise ValueError("CISA KEV feed unexpectedly empty")
     ids = changed_ids | kev | tracked_cve_ids(conn)
+    progress(f'EPSS: fetching scores for {len(ids)} CVE(s)...')
     epss = fetch_epss(ids)
     old_kev = {r['cve_id'] for r in conn.execute('SELECT cve_id FROM cves WHERE in_kev=1')}
     newly_kev = sorted(kev - old_kev)
@@ -92,6 +96,7 @@ def _synchronize(conn, config, dry_run, start, now):
                'kev_total': len(kev),
                'new_kev': newly_kev, 'epss_updated': len(epss),
                'since': start.isoformat(), 'until': now.isoformat(), 'dry_run': dry_run}
+    progress('dry run: nothing is written' if dry_run else 'Writing to the database...')
     if dry_run: return summary
     try:
         # Do not use db.save_cve: its REPLACE operation resets EPSS/KEV and may
@@ -134,8 +139,10 @@ def run(conn, config, dry_run=False, since=None, return_summary=False):
                 return (2, None) if return_summary else 2
             locked = True
         outcome = synchronize(conn, config, dry_run=dry_run, since=since)
-        shown = {k: v for k, v in outcome.items() if k != 'changed_cve_ids'}
+        shown = {k: v for k, v in outcome.items() if k not in ('changed_cve_ids', 'new_kev')}
         shown['changed_cve_count'] = len(outcome['changed_cve_ids'])
+        shown['new_kev_count'] = len(outcome['new_kev'])
+        shown['new_kev_sample'] = outcome['new_kev'][:10]      # the full list goes to the matcher, not the console
         print(json.dumps(shown, indent=2))
         return (0, outcome) if return_summary else 0
     except Exception as exc:

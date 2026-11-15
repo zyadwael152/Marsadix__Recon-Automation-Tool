@@ -333,9 +333,10 @@ def cmd_doctor(a, cfg: Config) -> int:
         print(f"  [{'KEY SET' if key else 'no key '}] {name:<15} ({var})")
     print("  A set key is only sent to its own provider. 'no key' = skipped (AlienVault OTX still runs, anonymously and rate-limited).")
     try:
+        from .alerts.settings import AlertSettings
         from .p4_cli import doctor_lines
         print("\nAlert channels:")
-        for line in doctor_lines():
+        for line in doctor_lines(AlertSettings.from_env(config=cfg)):
             print(f"  {line}")
     except Exception:
         pass
