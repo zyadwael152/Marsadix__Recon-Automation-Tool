@@ -70,7 +70,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--allow-injection", action="store_true",
                    help="explicit opt-in for injection-style checks (XSS/SQLi/SSTI probes)")
 
-    m = sub.add_parser("monitor", help="match new CVEs against stored technologies")
+    m = sub.add_parser("monitor", help="CVE monitor: sync the feeds, match them against your technologies and alert; repeats every --interval-hours (default 5)")
+    m.add_argument("--interval-hours", type=float, default=5.0, help="hours between cycles (default 5)")
+    m.add_argument("--once", action="store_true", help="run a single cycle and exit (--dry-run implies it)")
     m.add_argument("--dry-run", action="store_true", help="show matches, send nothing")
     m.add_argument("--since", metavar="ISO_DATE", help="override last sync time")
 
@@ -191,30 +193,17 @@ def _db_command(path: str, what: str, cfg: Config, **kwargs):
 
 
 def cmd_monitor(a, cfg: Config) -> int:
-    """Sync NVD/KEV/EPSS (monitor/runner.py), then match the CVEs against stored technologies and
-    alert (p4_cli.monitor_post_sync). Matching is skipped when the sync failed or was skipped, so it
-    never runs on stale data."""
-    import inspect
-    run = load_callable("marsadix.monitor.runner:run")
-    if run is None:
-        return _missing("marsadix.monitor.runner:run", "monitor")
-    post = load_callable("marsadix.p4_cli:monitor_post_sync")
-    conn = db.connect(cfg.db_path)
-    try:
-        db.init_db(conn)
-        kwargs = dict(conn=conn, config=cfg, dry_run=a.dry_run, since=a.since)
-        if post is not None and "return_summary" in inspect.signature(run).parameters:
-            kwargs["return_summary"] = True
-        result = run(**kwargs)
-        if not isinstance(result, tuple):                  # runner without the summary hook
-            return result if isinstance(result, int) else 0
-        rc, summary = result
-        if rc != 0:
-            return rc
-        post(conn, a, summary, config=cfg)
-        return 0
-    finally:
-        conn.close()
+    """Sync NVD/KEV/EPSS, match the CVEs against the stored technologies and alert; then repeat every
+    --interval-hours (default 5). --once (or --dry-run) runs a single cycle. Leave it running (tmux / nohup / Docker)."""
+    if a.interval_hours <= 0:
+        print("--interval-hours must be positive", file=sys.stderr)
+        return 2
+    watch = load_callable("marsadix.monitor.scheduler:watch")
+    if watch is None:
+        return _missing("marsadix.monitor.scheduler:watch", "monitor")
+    return watch(cfg, interval_hours=a.interval_hours, once=a.once or a.dry_run, dry_run=a.dry_run,
+                 send_alerts=not getattr(a, "no_alerts", False), since=a.since,
+                 all_cves=getattr(a, "all_cves", False), channels=getattr(a, "channel", None))
 
 
 def cmd_p4(a, cfg: Config) -> int:

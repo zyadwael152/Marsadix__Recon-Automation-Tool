@@ -28,27 +28,12 @@ def _run(db_path, *args):
     return main(["--no-banner", "--db", db_path, *args])
 
 
-def test_monitor_accepts_the_p4_flags_without_duplicate_option_errors(tmp_path, monkeypatch):
+def test_monitor_passes_every_p4_flag_to_the_scheduler(tmp_path, monkeypatch):
     seen = {}
-
-    def fake_run(conn, config, dry_run=False, since=None, return_summary=False):
-        return (0, {"changed_cve_ids": ["CVE-2021-41773"], "new_kev": [], "total": 1})
-
-    def fake_post(conn, args, summary, config=None):
-        seen.update(dry=args.dry_run, no_alerts=args.no_alerts, all=args.all_cves, channel=args.channel, summary=summary)
-
-    monkeypatch.setattr("marsadix.cli.load_callable", lambda p: fake_run if p.endswith("runner:run") else fake_post)
-    assert _run(_db(tmp_path), "monitor", "--dry-run", "--no-alerts", "--all", "--channel", "discord") == 0
-    assert seen["dry"] and seen["no_alerts"] and seen["all"] and seen["channel"] == ["discord"]
-    assert seen["summary"]["changed_cve_ids"] == ["CVE-2021-41773"]
-
-
-def test_monitor_does_not_match_when_the_sync_failed_or_was_skipped(tmp_path, monkeypatch):
-    called = []
     monkeypatch.setattr("marsadix.cli.load_callable",
-                        lambda p: (lambda conn, config, dry_run=False, since=None, return_summary=False: (1, None))
-                        if p.endswith("runner:run") else (lambda *a, **k: called.append(1)))
-    assert _run(_db(tmp_path), "monitor") == 1 and not called
+                        lambda p: (lambda cfg, **kw: seen.update(kw) or 0) if p.endswith("scheduler:watch") else None)
+    assert _run(_db(tmp_path), "monitor", "--once", "--no-alerts", "--all", "--channel", "discord") == 0
+    assert seen["send_alerts"] is False and seen["all_cves"] is True and seen["channels"] == ["discord"] and seen["once"] is True
 
 
 def test_p4_commands_run_end_to_end_on_the_real_schema(tmp_path, capsys):

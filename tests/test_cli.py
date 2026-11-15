@@ -45,17 +45,18 @@ def test_missing_command_module_exits_3(tmp_path, capsys, monkeypatch):
     assert "not implemented yet" in capsys.readouterr().err
 
 
-def test_monitor_delegates_to_runner_without_network(tmp_path, monkeypatch):
+def test_monitor_delegates_to_the_scheduler_without_network(tmp_path, monkeypatch):
     seen = {}
 
-    def fake_run(conn, config, dry_run=False, since=None):
-        seen.update(dry_run=dry_run, since=since)
+    def fake_watch(cfg, **kw):
+        seen.update(kw)
         return 0
 
-    monkeypatch.setattr("marsadix.cli.load_callable", lambda path: fake_run)
+    monkeypatch.setattr("marsadix.cli.load_callable", lambda path: fake_watch)
     dbp = str(tmp_path / "t.db")
     assert main(["--db", dbp, "monitor", "--dry-run"]) == 0
-    assert seen["dry_run"] is True
+    assert seen["dry_run"] is True and seen["once"] is True
+
 
 def test_report_needs_a_scan(tmp_path, capsys):
     dbp = str(tmp_path / "t.db")
