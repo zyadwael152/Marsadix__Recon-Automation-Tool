@@ -41,27 +41,26 @@ ART_COLOR = "red"
 TAGLINE_COLOR = "cyan"
 
 # ---------------------------------------------------------------- the art
-# Unicode block characters for crisp pixel-style logo & hacker art.
+# Pure ASCII on purpose: works on every Windows console encoding.
 LOGO = [
-    r"███╗   ███╗ █████╗ ██████╗ ███████╗ █████╗ ██████╗ ██╗██╗  ██╗",
-    r"████╗ ████║██╔══██╗██╔══██╗██╔════╝██╔══██╗██╔══██╗██║╚██╗██╔╝",
-    r"██╔████╔██║███████║██████╔╝███████╗███████║██║  ██║██║ ╚███╔╝ ",
-    r"██║╚██╔╝██║██╔══██║██╔══██╗╚════██║██╔══██║██║  ██║██║ ██╔██╗ ",
-    r"██║ ╚═╝ ██║██║  ██║██║  ██║███████║██║  ██║██████╔╝██║██╔╝ ██╗",
-    r"╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═════╝ ╚═╝╚═╝  ╚═╝",
+    r"  __  __    ___    ____    ____      _     ____    ___  __  __",
+    r" |  \/  |  / _ \  |  _ \  / ___|    / \   |  _ \  |_ _| \ \/ /",
+    r" | |\/| | / /_\ \ | |_) | \___ \   / _ \  | | | |  | |   \  / ",
+    r" | |  | |/ / _ \ \|  _ <   ___) | / ___ \ | |_| |  | |   /  \ ",
+    r" |_|  |_/_/   \_\_\_| \_\ |____/ /_/   \_\|____/  |___| /_/\_\ ",
 ]
 
 # The hacker: hood + dark glasses + mask. '#' = the lenses (painted white).
 HACKER = [
-    r"       .-------.       ",
-    r"     .'  _   _  '.     ",
-    r"    /   /     \   \    ",
-    r"   |   |=======|   |   ",
-    r"   |   |[##]-[##]| |   ",
-    r"   |   | \_____/ | |   ",
-    r"    \  |  \___/  | /   ",
-    r"   .-' '-._____.-' '-. ",
-    r"  /   /           \   \ ",
+    r"         .-----------.         ",
+    r"       .'   /     \   '.       ",
+    r"     .'    /       \    '.     ",
+    r"    |     |=========|     |    ",
+    r"    |     |[##]---[##]|     |    ",
+    r"    |      \  -----  /      |    ",
+    r"     \      \       /      /     ",
+    r"    .-'      '-----'      '-.  ",
+    r"   /   /                 \   \ ",
 ]
 
 # Small radar logo, used when the terminal is too narrow for the big one.
@@ -135,7 +134,7 @@ def _paint_row(row: str, t: dict, use_color: bool, pop: str = "") -> str:
         if ch == " ":
             out.append(ch)
         elif ch in pop:
-            out.append(_paint("█", t["text"], True))
+            out.append(_paint(ch, t["text"], True))
         else:
             out.append(_paint(ch, t["accent"], True))
     return "".join(out)
