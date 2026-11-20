@@ -168,14 +168,17 @@ def test_passive_mode_scans_nothing(conn, tools):
 
 
 def test_naabu_gets_each_public_ip_once_for_in_scope_non_cdn_hosts(conn, tools):
-    ports_stage.run(_ctx(conn, "standard"))
+    ports_stage.run(_ctx(conn, "active"))
     # www and api share one IP -> scanned once. Not evil.com (flag), not dev.example.com (rule),
     # not cdn.example.com (the ports belong to the CDN). IPs, not names: no second DNS lookup.
     assert tools["naabu"] == [{"hosts": [PUB], "rate": 30}]
 
 
-def test_standard_mode_stores_open_ports_for_every_name_on_the_ip(conn, tools):
-    ctx = _ctx(conn, "standard")
+def test_without_nmap_the_open_ports_are_stored_with_their_registered_names(conn, tools, monkeypatch):
+    def no_nmap(*a, **k):
+        raise ToolNotFound("'nmap' is not installed")
+    monkeypatch.setattr(ports_stage, "run_nmap", no_nmap)
+    ctx = _ctx(conn, "active")
     out = ports_stage.run(ctx)
 
     assert tools["nmap"] == []
@@ -189,13 +192,13 @@ def test_standard_mode_stores_open_ports_for_every_name_on_the_ip(conn, tools):
 
 
 def test_a_host_with_no_resolved_ip_is_not_scanned(conn, tools):
-    ctx = _ctx(conn, "standard", assets=[Asset(scan_id=0, host="ghost.example.com", ip=None, in_scope=True)])
+    ctx = _ctx(conn, "active", assets=[Asset(scan_id=0, host="ghost.example.com", ip=None, in_scope=True)])
     out = ports_stage.run(ctx)
     assert tools["naabu"] == [] and out["no_ip"] == 1 and out["hosts"] == 0
 
 
-def test_full_mode_adds_product_version_banner_and_cpe_23(conn, tools):
-    ctx = _ctx(conn, "full")
+def test_active_mode_adds_product_version_banner_and_cpe_23(conn, tools):
+    ctx = _ctx(conn, "active")
     ports_stage.run(ctx)
 
     ssh = _services(conn, ctx)[("www.example.com", 22)]
@@ -206,15 +209,15 @@ def test_full_mode_adds_product_version_banner_and_cpe_23(conn, tools):
     assert https["name"] == "https" and https["product"] is None and https["cpe"] is None
 
 
-def test_full_mode_scans_each_ip_once_even_if_several_hosts_share_it(conn, tools):
-    ports_stage.run(_ctx(conn, "full"))
+def test_active_mode_scans_each_ip_once_even_if_several_hosts_share_it(conn, tools):
+    ports_stage.run(_ctx(conn, "active"))
     assert tools["nmap"] == [{"ip": PUB, "ports": [22, 80, 443], "rate": 30}]
     # ...and every hostname on that IP still gets the result
     assert {(s["host"], s["port"]): s["product"] for s in db.get_services(conn, 1)}[("api.example.com", 80)] == "nginx"
 
 
-def test_full_mode_turns_detected_products_into_technologies(conn, tools):
-    ctx = _ctx(conn, "full")
+def test_active_mode_turns_detected_products_into_technologies(conn, tools):
+    ctx = _ctx(conn, "active")
     out = ports_stage.run(ctx)
 
     techs = {(t["host"], t["name"], t["version"]): t for t in db.get_technologies(conn, ctx.scan.id)}
@@ -229,7 +232,7 @@ def test_naabu_missing_skips_the_stage_with_the_reason(conn, monkeypatch):
     def boom(*a, **k):
         raise ToolNotFound("'naabu' is not installed or not in PATH. Run `marsadix doctor`.")
     monkeypatch.setattr(ports_stage, "run_naabu", boom)
-    ctx = _ctx(conn, "standard")
+    ctx = _ctx(conn, "active")
     out = ports_stage.run(ctx)
     assert "naabu" in out["skipped"] and "doctor" in out["skipped"]
     assert db.get_services(conn, ctx.scan.id) == []
@@ -239,7 +242,7 @@ def test_nmap_missing_keeps_the_port_names(conn, tools, monkeypatch):
     def boom(*a, **k):
         raise ToolNotFound("'nmap' is not installed")
     monkeypatch.setattr(ports_stage, "run_nmap", boom)
-    ctx = _ctx(conn, "full")
+    ctx = _ctx(conn, "active")
     out = ports_stage.run(ctx)
     assert "nmap" in out["note"]
     assert len(_services(conn, ctx)) == 6 and _services(conn, ctx)[("www.example.com", 22)]["product"] is None
@@ -248,7 +251,7 @@ def test_nmap_missing_keeps_the_port_names(conn, tools, monkeypatch):
 def test_an_asset_that_is_an_ip_literal_is_scanned_through_that_ip(conn, tools):
     tools["found"].clear()
     tools["found"]["93.184.216.9"] = {"ip": "93.184.216.9", "ports": [8080]}
-    ctx = _ctx(conn, "standard", scope=("93.184.216.0/24",),
+    ctx = _ctx(conn, "active", scope=("93.184.216.0/24",),
                assets=[Asset(scan_id=0, host="93.184.216.9", ip=None, in_scope=True)])
     ports_stage.run(ctx)
     assert tools["naabu"] == [{"hosts": ["93.184.216.9"], "rate": 30}]
@@ -259,14 +262,14 @@ def test_an_asset_that_is_an_ip_literal_is_scanned_through_that_ip(conn, tools):
 def test_a_malformed_tool_record_is_ignored_and_never_reaches_nmap(conn, tools):
     tools["found"].clear()
     tools["found"]["-oN /tmp/pwned"] = {"ip": "-oN /tmp/pwned", "ports": [80]}
-    ctx = _ctx(conn, "full")
+    ctx = _ctx(conn, "active")
     ports_stage.run(ctx)
     assert tools["nmap"] == []                                  # no argv built from the bad value
     assert db.get_services(conn, ctx.scan.id) == []
 
 
 def test_rerunning_does_not_duplicate_rows(conn, tools):
-    ctx = _ctx(conn, "full")
+    ctx = _ctx(conn, "active")
     first = ports_stage.run(ctx)
     second = ports_stage.run(ctx)
     assert first["services"] == 6 and second["services"] == 0
@@ -274,12 +277,12 @@ def test_rerunning_does_not_duplicate_rows(conn, tools):
 
 
 def test_no_in_scope_hosts_means_no_tool_runs(conn, tools):
-    ports_stage.run(_ctx(conn, "full", scope=("other.org",)))
+    ports_stage.run(_ctx(conn, "active", scope=("other.org",)))
     assert tools["naabu"] == [] and tools["nmap"] == []
 
 
 def test_stored_ports_and_technologies_appear_in_the_knowledge_graph(conn, tools):
-    ctx = _ctx(conn, "full")
+    ctx = _ctx(conn, "active")
     ports_stage.run(ctx)
     build_graph(conn, ctx.scan.id)
     types = {n["id"]: n["node_type"] for n in db.get_graph(conn, ctx.scan.id)["nodes"]}
@@ -299,7 +302,7 @@ INTERNAL = ["127.0.0.1", "10.0.0.5", "172.16.0.9", "192.168.1.10", "169.254.169.
 def test_an_in_scope_name_that_resolves_to_an_internal_address_is_never_scanned(conn, tools, ip):
     """DNS is controlled by whoever owns the name: it can point anywhere, including at the tester."""
     tools["found"].clear()
-    ctx = _ctx(conn, "full", assets=[Asset(scan_id=0, host="evil.example.com", ip=ip, in_scope=True),
+    ctx = _ctx(conn, "active", assets=[Asset(scan_id=0, host="evil.example.com", ip=ip, in_scope=True),
                                      Asset(scan_id=0, host="ok.example.com", ip=PUB, in_scope=True)])
     out = ports_stage.run(ctx)
     assert tools["naabu"] == [{"hosts": [PUB], "rate": 30}]
@@ -309,7 +312,7 @@ def test_an_in_scope_name_that_resolves_to_an_internal_address_is_never_scanned(
 def test_an_internal_range_listed_in_the_scope_file_is_scanned(conn, tools):
     tools["found"].clear()
     tools["found"]["10.0.0.5"] = {"ip": "10.0.0.5", "ports": [445]}
-    ctx = _ctx(conn, "standard", scope=("example.com", "*.example.com", "10.0.0.0/8", "!10.0.0.99"),
+    ctx = _ctx(conn, "active", scope=("example.com", "*.example.com", "10.0.0.0/8", "!10.0.0.99"),
                assets=[Asset(scan_id=0, host="lan.example.com", ip="10.0.0.5", in_scope=True),
                        Asset(scan_id=0, host="other.example.com", ip="10.0.0.99", in_scope=True),      # excluded address
                        Asset(scan_id=0, host="far.example.com", ip="172.16.0.9", in_scope=True)])      # not listed

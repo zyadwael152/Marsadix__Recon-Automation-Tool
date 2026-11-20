@@ -17,7 +17,7 @@ def scan_conn(tmp_path):
     conn.close()
 
 
-def _save(conn, target, mode=ScanMode.FULL, scope_file=None):
+def _save(conn, target, mode=ScanMode.ACTIVE, scope_file=None):
     scan = Scan(target=target, mode=mode, scope_file=scope_file)
     scan.id = db.save_scan(conn, scan)
     return scan.id
@@ -121,10 +121,10 @@ def test_pipeline_auto_creates_scan_with_full_mode_when_scope_is_supplied(
 
     assert report.scan_id != old_id
     assert report.target == "127.0.0.1"
-    assert report.mode == "full"
+    assert report.mode == "active"
     row = scan_conn.execute(
         "SELECT target, mode, scope_file FROM scans WHERE id=?",
         (report.scan_id,)).fetchone()
     assert row["target"] == "127.0.0.1"
-    assert row["mode"] == "full"
+    assert row["mode"] == "active"
     assert row["scope_file"] == str(scope)

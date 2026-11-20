@@ -14,7 +14,7 @@ def test_asm_receives_scoped_web_endpoints_and_preserves_paths(tmp_path, monkeyp
     conn = db.connect(":memory:")
     db.init_db(conn)
     scan = Scan(target="example.com", status=ScanStatus.RUNNING,
-                mode=ScanMode.STANDARD, rate_limit=10)
+                mode=ScanMode.ACTIVE, rate_limit=10)
     db.save_scan(conn, scan)
     db.save_many(conn, "assets", [
         Asset(scan_id=scan.id, host="api.example.com", in_scope=True),
@@ -36,7 +36,7 @@ def test_asm_receives_scoped_web_endpoints_and_preserves_paths(tmp_path, monkeyp
         conn=conn, scan=scan,
         scope=Scope.from_lines(["example.com", "*.example.com", "!dev.example.com"]),
         config=Config(db_path=":memory:", output_dir=str(tmp_path / "out"),
-                      scan_mode="standard", rate_limit=10),
+                      scan_mode="active", rate_limit=10),
     )
 
     captured = {}

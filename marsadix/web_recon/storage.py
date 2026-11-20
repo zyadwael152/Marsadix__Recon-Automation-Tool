@@ -82,13 +82,13 @@ def _latest_scan_for_target(conn, target: str):
 
 def _create_scan(conn, target: str, *, mode: Optional[str],
                  scope_file: Optional[str], rate_limit: Optional[int]) -> dict:
-    selected = mode or ("full" if scope_file else "passive")
+    selected = mode or ("active" if scope_file else "passive")
     selected = getattr(selected, "value", selected)
     try:
         scan_mode = ScanMode(str(selected).lower())
     except ValueError as exc:
         raise ConfigError(
-            f"invalid scan mode {selected!r}; expected passive, standard or full") from exc
+            f"invalid scan mode {selected!r}; expected passive or active") from exc
     scan = Scan(target=target, mode=scan_mode, scope_file=scope_file,
                 rate_limit=rate_limit)
     scan.id = db.save_scan(conn, scan)

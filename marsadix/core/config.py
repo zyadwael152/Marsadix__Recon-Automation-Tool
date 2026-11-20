@@ -27,7 +27,16 @@ class ConfigError(ValueError):
     pass
 
 
-SCAN_MODES = ("passive", "standard", "full")
+SCAN_MODES = ("passive", "active")
+
+# Scans used to have three modes. The two old active ones now mean "active".
+LEGACY_MODES = {"standard": "active", "full": "active"}
+
+
+def normalize_mode(value) -> str:
+    """'standard' and 'full' (old names) -> 'active'. Anything else comes back lower-cased."""
+    v = str(getattr(value, "value", value)).strip().lower()
+    return LEGACY_MODES.get(v, v)
 
 # environment variable -> Config field
 ENV_MAP = {
@@ -66,7 +75,7 @@ class Config:
     tool_timeout: int = 600       # hard upper bound (seconds) for ANY single external tool
     max_concurrent_tools: int = 8  # external tool processes allowed to run at the same time
     parallel_stages: bool = True   # run independent stages (web + ports) side by side (C5b)
-    scan_mode: str = "passive"    # passive | standard | full               (C15)
+    scan_mode: str = "passive"    # passive | active                        (C15)
     allow_injection: bool = False  # explicit opt-in for injection checks   (A5)
 
     # Recon tuning. recon/stage.py reads these with getattr(...) so it keeps
@@ -104,6 +113,7 @@ class Config:
             raise ConfigError("tool_timeout must be >= 1")
         if self.max_concurrent_tools < 1:
             raise ConfigError("max_concurrent_tools must be >= 1")
+        self.scan_mode = normalize_mode(self.scan_mode)     # old config.toml values still work
         if self.scan_mode not in SCAN_MODES:
             raise ConfigError(f"scan_mode must be one of {SCAN_MODES}")
         if self.dns_rate_limit < 0:

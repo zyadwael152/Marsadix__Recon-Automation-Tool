@@ -96,25 +96,17 @@ def test_gau_archived_urls_are_stored_only_when_in_scope(conn, tmp_path, calls, 
     assert (tmp_path / "out" / "example.com_archived_urls.txt").read_text().splitlines() == out["archived_urls"]
 
 
-def test_standard_mode_probes_but_does_not_crawl(conn, tmp_path, calls):
-    out = web_stage.run(_ctx(conn, tmp_path, "standard"))
-
-    assert len(calls["httpx"]) == 1
-    assert calls["katana"] == []
-    assert out["endpoints"] == []
-    assert out["live_urls"] == ["https://api.example.com", "https://www.example.com"]
-
-
-def test_full_mode_probes_and_crawls(conn, tmp_path, calls):
-    out = web_stage.run(_ctx(conn, tmp_path, "full"))
+def test_active_mode_probes_and_crawls(conn, tmp_path, calls):
+    out = web_stage.run(_ctx(conn, tmp_path, "active"))
 
     assert len(calls["httpx"]) == 1 and len(calls["katana"]) == 1
+    assert out["live_urls"] == ["https://api.example.com", "https://www.example.com"]
     assert "https://www.example.com/login" in out["endpoints"]
 
 
 # ----------------------------------------------------------------- scope (bug 5)
 
-@pytest.mark.parametrize("mode", ["standard", "full"])
+@pytest.mark.parametrize("mode", ["active"])
 def test_out_of_scope_hosts_are_never_probed(conn, tmp_path, calls, mode):
     web_stage.run(_ctx(conn, tmp_path, mode))
 
@@ -125,13 +117,13 @@ def test_out_of_scope_hosts_are_never_probed(conn, tmp_path, calls, mode):
 
 
 def test_crawler_results_pointing_outside_scope_are_dropped(conn, tmp_path, calls):
-    out = web_stage.run(_ctx(conn, tmp_path, "full"))
+    out = web_stage.run(_ctx(conn, tmp_path, "active"))
 
     assert not any("evil.com" in u or "dev.example.com" in u for u in out["endpoints"])
 
 
 def test_no_in_scope_hosts_means_no_tool_runs(conn, tmp_path, calls):
-    ctx = _ctx(conn, tmp_path, "full", scope_lines=("other.org",))
+    ctx = _ctx(conn, tmp_path, "active", scope_lines=("other.org",))
     out = web_stage.run(ctx)
 
     assert calls["httpx"] == [] and calls["katana"] == []
@@ -147,7 +139,7 @@ def test_no_in_scope_hosts_means_no_tool_runs(conn, tmp_path, calls):
 
 def test_results_are_written_to_the_configured_output_dir(conn, tmp_path, calls, monkeypatch):
     monkeypatch.chdir(tmp_path)                 # a stray "outputs/" would appear here
-    web_stage.run(_ctx(conn, tmp_path, "full"))
+    web_stage.run(_ctx(conn, tmp_path, "active"))
 
     out = tmp_path / "out"
     assert (out / "example.com_live_urls.txt").read_text().splitlines() == [
@@ -189,30 +181,38 @@ def test_scan_mode_flag_reaches_the_stages_through_config_too(tmp_path, calls, m
     monkeypatch.setattr("marsadix.recon.stage.run",
                         lambda ctx: seen.update(config_mode=ctx.config.scan_mode, ctx_mode=ctx.mode))
     cfg = Config(db_path=str(tmp_path / "t.db"), output_dir=str(tmp_path / "out"), scan_mode="passive")
-    run_scan("example.com", cfg, mode="full", scope=Scope.from_lines(["example.com", "*.example.com"]))
+    run_scan("example.com", cfg, mode="active", scope=Scope.from_lines(["example.com", "*.example.com"]))
 
     # ctx.config.scan_mode used to stay "passive" and ignore the --mode flag
-    assert seen == {"config_mode": "full", "ctx_mode": "full"}
+    assert seen == {"config_mode": "active", "ctx_mode": "active"}
 
 
-def test_scan_standard_mode_probes_only_in_scope_hosts(tmp_path, pipeline, calls):
+def test_the_old_mode_names_run_as_active(tmp_path, calls, monkeypatch):
+    seen = {}
+    monkeypatch.setattr("marsadix.recon.stage.run", lambda ctx: seen.update(ctx_mode=ctx.mode))
     cfg = Config(db_path=str(tmp_path / "t.db"), output_dir=str(tmp_path / "out"))
-    scan, results = run_scan("example.com", cfg, mode="standard", scope=Scope.from_lines(["example.com", "*.example.com"]))
+    run_scan("example.com", cfg, mode="active", scope=Scope.from_lines(["example.com", "*.example.com"]))
+    assert seen == {"ctx_mode": "active"}
+
+
+def test_scan_active_mode_probes_only_in_scope_hosts(tmp_path, pipeline, calls):
+    cfg = Config(db_path=str(tmp_path / "t.db"), output_dir=str(tmp_path / "out"))
+    scan, results = run_scan("example.com", cfg, mode="active", scope=Scope.from_lines(["example.com", "*.example.com"]))
 
     assert _stage(results, "web").status == "ok"
     assert calls["httpx"] == [["www.example.com"]]
-    assert calls["katana"] == []
+    assert calls["katana"] == [["https://www.example.com"]]      # only the live, in-scope URL is crawled
 
 
 # --------------------------------------------------------------- rate limit (C6)
 
 def test_scan_rate_limit_is_passed_to_both_tools(conn, tmp_path, calls):
-    web_stage.run(_ctx(conn, tmp_path, "full"))
+    web_stage.run(_ctx(conn, tmp_path, "active"))
     assert calls["rates"] == [("httpx", 25), ("katana", 25)]
 
 
 def test_configured_tool_timeout_is_passed_to_both_tools(conn, tmp_path, calls):
-    ctx = _ctx(conn, tmp_path, "full")
+    ctx = _ctx(conn, tmp_path, "active")
     ctx.config.tool_timeout = 42
 
     web_stage.run(ctx)
@@ -222,7 +222,7 @@ def test_configured_tool_timeout_is_passed_to_both_tools(conn, tmp_path, calls):
 
 def test_cli_rate_flag_reaches_the_tools_through_the_pipeline(tmp_path, pipeline, calls):
     cfg = Config(db_path=str(tmp_path / "t.db"), output_dir=str(tmp_path / "out"), rate_limit=50)
-    run_scan("example.com", cfg, mode="full", rate_limit=3,
+    run_scan("example.com", cfg, mode="active", rate_limit=3,
              scope=Scope.from_lines(["example.com", "*.example.com"]))
     assert calls["rates"] == [("httpx", 3), ("katana", 3)]
 
@@ -233,8 +233,9 @@ def _items(conn, scan_id):
     return {(r["kind"], r["url"]): r for r in db.get_web_items(conn, scan_id)}
 
 
-def test_live_urls_are_stored_with_their_status_code(conn, tmp_path, calls):
-    ctx = _ctx(conn, tmp_path, "standard")
+def test_live_urls_are_stored_with_their_status_code(conn, tmp_path, calls, monkeypatch):
+    monkeypatch.setattr(web_stage, "run_katana", lambda *a, **k: _async([]))      # no crawl results: only the probe is checked here
+    ctx = _ctx(conn, tmp_path, "active")
     web_stage.run(ctx)
 
     items = _items(conn, ctx.scan.id)
@@ -245,7 +246,7 @@ def test_live_urls_are_stored_with_their_status_code(conn, tmp_path, calls):
 
 
 def test_crawled_endpoints_are_classified_and_stored(conn, tmp_path, calls):
-    ctx = _ctx(conn, tmp_path, "full")
+    ctx = _ctx(conn, tmp_path, "active")
     web_stage.run(ctx)
 
     items = _items(conn, ctx.scan.id)
@@ -259,7 +260,7 @@ def test_crawled_endpoints_are_classified_and_stored(conn, tmp_path, calls):
 
 
 def test_rerunning_the_stage_does_not_duplicate_rows(conn, tmp_path, calls):
-    ctx = _ctx(conn, tmp_path, "full")
+    ctx = _ctx(conn, tmp_path, "active")
     first = web_stage.run(ctx)["stored"]
     second = web_stage.run(ctx)["stored"]
 
@@ -277,7 +278,7 @@ def test_stored_items_appear_in_the_json_report(conn, tmp_path, calls):
     import json
     from marsadix.reports.generate import generate_report
 
-    ctx = _ctx(conn, tmp_path, "full")
+    ctx = _ctx(conn, tmp_path, "active")
     web_stage.run(ctx)
     ctx.conn.execute("UPDATE scans SET status='completed' WHERE id=?", (ctx.scan.id,))
     ctx.conn.commit()
@@ -314,7 +315,7 @@ def _techs(conn, scan_id):
 
 
 def test_technologies_and_versions_are_stored(conn, tmp_path, rich):
-    ctx = _ctx(conn, tmp_path, "standard")
+    ctx = _ctx(conn, tmp_path, "active")
     out = web_stage.run(ctx)
 
     t = _techs(conn, ctx.scan.id)
@@ -329,14 +330,14 @@ def test_technologies_and_versions_are_stored(conn, tmp_path, rich):
 
 
 def test_the_server_header_is_not_stored_twice_when_wappalyzer_saw_it_too(conn, tmp_path, rich):
-    ctx = _ctx(conn, tmp_path, "standard")
+    ctx = _ctx(conn, tmp_path, "active")
     web_stage.run(ctx)
     nginx_rows = [k for k in _techs(conn, ctx.scan.id) if k[0] == "www.example.com" and k[1].lower() == "nginx"]
     assert nginx_rows == [("www.example.com", "Nginx", "1.18.0")]
 
 
 def test_cdn_and_ip_are_recorded_on_the_asset(conn, tmp_path, rich):
-    ctx = _ctx(conn, tmp_path, "standard")
+    ctx = _ctx(conn, tmp_path, "active")
     web_stage.run(ctx)
 
     assets = {a["host"]: a for a in db.get_assets(conn, ctx.scan.id)}
@@ -346,7 +347,7 @@ def test_cdn_and_ip_are_recorded_on_the_asset(conn, tmp_path, rich):
 
 
 def test_an_ip_recon_already_resolved_is_not_overwritten_and_cdn_is_never_switched_off(conn, tmp_path, rich):
-    ctx = _ctx(conn, tmp_path, "standard")
+    ctx = _ctx(conn, tmp_path, "active")
     conn.execute("UPDATE assets SET ip='151.101.1.5' WHERE host='www.example.com' AND scan_id=?", (ctx.scan.id,))
     conn.execute("UPDATE assets SET is_cdn=1, cdn_name='akamai' WHERE host='www.example.com' AND scan_id=?", (ctx.scan.id,))
     conn.commit()
@@ -364,7 +365,7 @@ def test_passive_mode_stores_no_technologies(conn, tmp_path, rich):
 
 def test_technologies_reach_the_knowledge_graph_with_their_versions(conn, tmp_path, rich):
     from marsadix.core.graph import build_graph
-    ctx = _ctx(conn, tmp_path, "standard")
+    ctx = _ctx(conn, tmp_path, "active")
     web_stage.run(ctx)
     build_graph(conn, ctx.scan.id)
     ids = {n["id"] for n in db.get_graph(conn, ctx.scan.id)["nodes"]}
@@ -382,7 +383,7 @@ def _set_ip(conn, scan_id, host, ip):
 
 @pytest.mark.parametrize("ip", ["127.0.0.1", "10.0.0.5", "169.254.169.254", "192.168.1.10", "::1", "fe80::1"])
 def test_hosts_resolving_to_internal_addresses_are_never_probed(conn, tmp_path, calls, ip):
-    ctx = _ctx(conn, tmp_path, "standard")
+    ctx = _ctx(conn, tmp_path, "active")
     _set_ip(conn, ctx.scan.id, "www.example.com", ip)
     _set_ip(conn, ctx.scan.id, "api.example.com", "93.184.216.34")
     web_stage.run(ctx)
@@ -390,7 +391,7 @@ def test_hosts_resolving_to_internal_addresses_are_never_probed(conn, tmp_path, 
 
 
 def test_an_internal_range_listed_in_the_scope_file_is_probed(conn, tmp_path, calls):
-    ctx = _ctx(conn, tmp_path, "standard", scope_lines=("example.com", "*.example.com", "!dev.example.com", "10.0.0.0/8"))
+    ctx = _ctx(conn, tmp_path, "active", scope_lines=("example.com", "*.example.com", "!dev.example.com", "10.0.0.0/8"))
     _set_ip(conn, ctx.scan.id, "www.example.com", "10.0.0.5")
     _set_ip(conn, ctx.scan.id, "api.example.com", "192.168.1.1")          # not listed
     web_stage.run(ctx)
@@ -413,7 +414,7 @@ def test_a_host_that_answers_from_an_internal_address_is_discarded_and_not_crawl
     monkeypatch.setattr(web_stage, "run_httpx", fake_httpx)
     monkeypatch.setattr(web_stage, "run_katana", fake_katana)
 
-    ctx = _ctx(conn, tmp_path, "full")
+    ctx = _ctx(conn, tmp_path, "active")
     out = web_stage.run(ctx)
 
     assert out["live_urls"] == ["https://api.example.com"] and crawled == ["https://api.example.com"]

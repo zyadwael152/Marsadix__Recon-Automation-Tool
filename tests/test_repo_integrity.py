@@ -119,13 +119,14 @@ def test_nuclei_never_runs_dos_fuzz_or_intrusive_templates(monkeypatch):
 def test_the_registry_lists_every_skill_as_active_in_the_right_mode():
     from marsadix.skills import registry
     everything = {s.name for s in registry.all_skills()}
-    assert {s.name for s in registry.active_skills("full", True)} == everything
+    assert {s.name for s in registry.active_skills("active", True)} == everything
+    assert registry.active_skills("full", True) == registry.active_skills("active", True)     # old name still means active
     enumeration = {s.name for s in registry.all_skills() if s.category == "enumeration"}
     assert enumeration == {"security-headers", "cors", "robots-sitemap", "directory-listing",
                            "dns-zone-transfer", "email-security", "dns-wildcard"}
-    assert {s.name for s in registry.active_skills("standard", True)} == {
+    assert {s.name for s in registry.active_skills("active", False)} == {
         "nuclei-takeover", "nuclei-exposures", "nuclei-tech-cve", "jwt", "git-env-exposure"} | enumeration
     assert registry.active_skills("passive", True) == []
-    # without --allow-injection the injection-style probes are off even in full mode
-    off = everything - {s.name for s in registry.active_skills("full", False)}
+    # without --allow-injection the injection-style probes are off even in active mode
+    off = everything - {s.name for s in registry.active_skills("active", False)}
     assert off == {"xss", "sqli", "ssti", "open-redirect", "crlf", "host-header"}

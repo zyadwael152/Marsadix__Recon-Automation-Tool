@@ -6,15 +6,15 @@ from marsadix.core.scope import Scope, ScopeError
 
 
 def test_run_scan_defaults_to_config_mode(tmp_path):
-    cfg = Config(db_path=str(tmp_path / "t.db"), scan_mode="standard")
+    cfg = Config(db_path=str(tmp_path / "t.db"), scan_mode="active")
     scan, _ = run_scan("example.com", cfg, scope=Scope.from_target("example.com"))
-    assert scan.mode.value == "standard"
+    assert scan.mode.value == "active"
 
 
 def test_run_scan_explicit_mode_overrides_config(tmp_path):
     cfg = Config(db_path=str(tmp_path / "t.db"), scan_mode="passive")
-    scan, _ = run_scan("example.com", cfg, mode="full", scope=Scope.from_target("example.com"))
-    assert scan.mode.value == "full"
+    scan, _ = run_scan("example.com", cfg, mode="active", scope=Scope.from_target("example.com"))
+    assert scan.mode.value == "active"
 
 
 def test_run_scan_rejects_invalid_mode(tmp_path):
@@ -33,7 +33,7 @@ def test_run_scan_allow_injection_does_not_mutate_shared_config(tmp_path):
 # Scope is mandatory before any active scan (C15)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("mode", ["standard", "full"])
+@pytest.mark.parametrize("mode", ["active"])
 def test_active_modes_refuse_to_run_without_an_explicit_scope(tmp_path, mode):
     dbp = tmp_path / "t.db"
     cfg = Config(db_path=str(dbp))
@@ -43,7 +43,7 @@ def test_active_modes_refuse_to_run_without_an_explicit_scope(tmp_path, mode):
 
 
 def test_config_default_mode_is_also_checked(tmp_path):
-    cfg = Config(db_path=str(tmp_path / "t.db"), scan_mode="standard")
+    cfg = Config(db_path=str(tmp_path / "t.db"), scan_mode="active")
     with pytest.raises(ScopeError):
         run_scan("example.com", cfg)         # mode comes from config.toml, not the flag
 
@@ -56,7 +56,7 @@ def test_passive_mode_still_works_without_a_scope(tmp_path):
 
 def test_scope_file_path_is_stored_on_the_scan(tmp_path):
     cfg = Config(db_path=str(tmp_path / "t.db"))
-    scan, _ = run_scan("example.com", cfg, mode="standard",
+    scan, _ = run_scan("example.com", cfg, mode="active",
                        scope=Scope.from_target("example.com"), scope_file="scope.txt")
     assert scan.scope_file == "scope.txt"
 

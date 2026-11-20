@@ -4,8 +4,9 @@ the results.
 
 Rules this stage follows:
 
-1. MODE (C15): passive never contacts the target. standard runs httpx only
-   (one request per host). full adds the katana crawl.
+1. MODE (C15): passive never contacts the target: it only collects archived
+   URLs with gau. active runs httpx (one request per host) and then the katana
+   crawl.
 2. SCOPE: only in-scope hosts are handed to a tool. Tool output is filtered
    again, because a crawler follows links to hosts that were never in the input.
 3. RATE (C6): the scan's rate limit is passed to both tools.
@@ -150,7 +151,7 @@ def run(ctx, *args, **kwargs) -> dict:
     ) if archived_urls else 0
     _write_outputs(out_dir, ctx.target, {"archived_urls": archived_urls})
 
-    if not ctx.allows("standard"):
+    if not ctx.allows("active"):
         if gau_result is None:
             reason = (f"mode '{ctx.mode}' makes no contact with the target and gau is "
                       "not installed, so archived URL collection was skipped")
@@ -191,12 +192,10 @@ def run(ctx, *args, **kwargs) -> dict:
         db.update_asset_confidence(ctx.conn, scan_id, host, score)
 
     endpoints: List[str] = []
-    if live_urls and ctx.allows("full"):
+    if live_urls:
         seen = {_canonical(u) for u in live_urls}
         crawled = asyncio.run(run_katana(live_urls, rate, timeout=ctx.config.tool_timeout))
         endpoints = [u for u in _scoped(ctx, crawled) if _canonical(u) not in seen]
-    elif live_urls:
-        logger.info("[*] Crawling skipped: katana only runs in --mode full")
 
     host_set = set(hosts)
     technologies: List[Technology] = []

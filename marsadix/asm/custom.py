@@ -4,9 +4,9 @@ CRLF, Host header, JWT review and .git / .env exposure. The checks themselves li
 module chooses WHAT to test and HOW MUCH, and runs them.
 
 Gating (the registry decides, see skills/registry.py):
-  standard   the two low-traffic skills: JWT review and .git/.env exposure
-  full       + the injection-style skills (XSS, SQLi, SSTI, open redirect, CRLF, Host header),
-             and only with the explicit --allow-injection opt-in
+  active     the low-traffic skills (JWT review, .git/.env exposure, headers, CORS, DNS ...) and,
+             only with the explicit --allow-injection opt-in, the injection-style skills
+             (XSS, SQLi, SSTI, open redirect, CRLF, Host header)
   passive    nothing (the stage is skipped before this module is reached)
 
 Targets are the live URLs / parameterised URLs the web stage stored. They are re-checked against the scope AND
@@ -99,7 +99,7 @@ def run(ctx, rate_limit: Optional[float] = None, timeout: float = 10) -> Optiona
     held_back = [s.name for s in registry.active_skills(ctx.mode, True)
                  if s.engine == "custom" and s.needs_opt_in] if not allow else []
     if held_back:
-        log.info("injection-style skills not run (they need --allow-injection in full mode): %s", ", ".join(held_back))
+        log.info("injection-style skills not run (they need --allow-injection in active mode): %s", ", ".join(held_back))
     if not active:
         return None
 

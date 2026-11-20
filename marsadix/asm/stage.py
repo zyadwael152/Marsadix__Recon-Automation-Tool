@@ -36,9 +36,9 @@ def _targets(ctx) -> list[str]:
 
 
 def _run_nuclei_stage(ctx) -> dict:
-    """Execute ASM Nuclei checks for standard/full scans only."""
-    if not ctx.allows("standard"):
-        return {"skipped": "ASM active checks require standard or full mode"}
+    """Execute ASM Nuclei checks for active scans only."""
+    if not ctx.allows("active"):
+        return {"skipped": "ASM checks send traffic to the target: they need --mode active"}
 
     # ASM owns its Nuclei configuration; shared runtime limits are inherited
     # from the main application config, never from Web Recon.
@@ -91,7 +91,7 @@ def _run_nuclei_stage(ctx) -> dict:
 def run(ctx) -> dict:
     """The ASM stage: Nuclei template checks, then the custom detection skills (skills/registry.py decides which)."""
     out = _run_nuclei_stage(ctx)
-    if not ctx.allows("standard"):
+    if not ctx.allows("active"):
         return out                                   # passive: nothing may touch the target
     cfg = ASMConfig.from_runtime(ctx.config)
     custom = run_custom(ctx, rate_limit=cfg.rate_limit, timeout=cfg.request_timeout)

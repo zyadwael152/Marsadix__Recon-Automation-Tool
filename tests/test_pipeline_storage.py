@@ -18,7 +18,7 @@ def scan_db(tmp_path):
     scope.write_text("127.0.0.1\n", encoding="utf-8")
     conn = db.connect(str(path))
     db.init_db(conn)
-    scan = Scan(target="localhost", mode=ScanMode.FULL, scope_file=str(scope))
+    scan = Scan(target="localhost", mode=ScanMode.ACTIVE, scope_file=str(scope))
     scan.id = db.save_scan(conn, scan)
     yield conn, scan.id, scope
     conn.close()

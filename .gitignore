@@ -11,3 +11,7 @@ scope.txt
 *.db-shm
 *.db-journal
 outputs/
+*.bak*
+*:Zone.Identifier
+version_detect.py
+

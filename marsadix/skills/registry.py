@@ -40,7 +40,7 @@ class Skill:
     engine: str                       # "nuclei" | "custom"
     finding_type: str                 # key into owasp.OWASP_MAPPING
     source_reference: str             # documented methodology (A9)
-    min_mode: str = "standard"        # passive | standard | full: lowest scan mode that may run it
+    min_mode: str = "active"          # passive | active: lowest scan mode that may run it
     needs_opt_in: bool = False        # injection-style probes need --allow-injection
     enabled: bool = True
     category: str = "detection"       # "detection" (looks for a weakness) | "enumeration" (maps what is there)
@@ -60,17 +60,17 @@ SKILLS: List[Skill] = [
           "ProjectDiscovery nuclei-templates (cves, technologies)"),
     # ---- custom skills on top of Nuclei (A5, A8) ------------------------------------------
     Skill("xss", "Reflected XSS (reflection evidence)", "custom", "xss_detected",
-          "OWASP Testing Guide; PortSwigger XSS methodology", needs_opt_in=True, min_mode="full"),
+          "OWASP Testing Guide; PortSwigger XSS methodology", needs_opt_in=True, min_mode="active"),
     Skill("sqli", "SQL injection (error / time-based evidence)", "custom", "sqli_detected",
-          "OWASP Testing Guide; PortSwigger SQL injection methodology", needs_opt_in=True, min_mode="full"),
+          "OWASP Testing Guide; PortSwigger SQL injection methodology", needs_opt_in=True, min_mode="active"),
     Skill("ssti", "Server-side template injection", "custom", "ssti_detected",
-          "PortSwigger SSTI methodology; PayloadsAllTheThings", needs_opt_in=True, min_mode="full"),
+          "PortSwigger SSTI methodology; PayloadsAllTheThings", needs_opt_in=True, min_mode="active"),
     Skill("open-redirect", "Open redirect", "custom", "open_redirect",
-          "PortSwigger; PayloadsAllTheThings", needs_opt_in=True, min_mode="full"),
+          "PortSwigger; PayloadsAllTheThings", needs_opt_in=True, min_mode="active"),
     Skill("crlf", "CRLF injection", "custom", "crlf_injection",
-          "PayloadsAllTheThings; HackTricks", needs_opt_in=True, min_mode="full"),
+          "PayloadsAllTheThings; HackTricks", needs_opt_in=True, min_mode="active"),
     Skill("host-header", "Host header injection", "custom", "host_header_injection",
-          "PortSwigger Host header attacks; HackTricks", needs_opt_in=True, min_mode="full"),
+          "PortSwigger Host header attacks; HackTricks", needs_opt_in=True, min_mode="active"),
     Skill("jwt", "JWT weaknesses", "custom", "jwt_weakness",
           "PortSwigger JWT attacks; HackTricks"),
     Skill("git-env-exposure", "Exposed .git / .env files", "custom", "git_env_exposure",
@@ -136,18 +136,27 @@ def all_skills() -> List[Skill]:
     return list(SKILLS)
 
 
-def active_skills(mode: str = "full", allow_injection: bool = True,
+_MODE_ORDER = {"passive": 0, "active": 1}
+
+
+def _norm(mode: str) -> str:
+    """Old mode names (standard / full) mean active."""
+    m = str(mode).strip().lower()
+    return "active" if m in ("standard", "full") else m
+
+
+def active_skills(mode: str = "active", allow_injection: bool = True,
                   disabled: Iterable[str] = ()) -> List[Skill]:
     """Skills that are enabled, implemented and allowed in this scan mode / opt-in state."""
-    order = {"passive": 0, "standard": 1, "full": 2}
+    rank = _MODE_ORDER.get(_norm(mode), 0)
     off = set(disabled)
     return [s for s in SKILLS
             if s.enabled and s.name not in off and is_implemented(s.name)
-            and order.get(mode, 0) >= order[s.min_mode]
+            and rank >= _MODE_ORDER[_norm(s.min_mode)]
             and (allow_injection or not s.needs_opt_in)]
 
 
-def render_table(mode: str = "full") -> str:
+def render_table(mode: str = "active") -> str:
     """Plain-text table for `marsadix skills`."""
     act = {s.name for s in active_skills(mode, allow_injection=True)}
     rows = [("skill", "kind", "OWASP", "state", "source")]

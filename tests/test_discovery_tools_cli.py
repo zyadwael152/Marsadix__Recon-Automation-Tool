@@ -26,7 +26,7 @@ def example_scan(tmp_path):
     scope.write_text("example.com\n*.example.com\n", encoding="utf-8")
     conn = db.connect(str(path))
     db.init_db(conn)
-    scan = Scan(target="example.com", mode=ScanMode.FULL, scope_file=str(scope))
+    scan = Scan(target="example.com", mode=ScanMode.ACTIVE, scope_file=str(scope))
     scan.id = db.save_scan(conn, scan)
     yield conn, scan.id, scope
     conn.close()

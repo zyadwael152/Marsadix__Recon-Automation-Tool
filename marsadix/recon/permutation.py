@@ -4,7 +4,7 @@ R5: Permutation (alterx, with a built-in fallback).
 Takes the subdomains already discovered and generates likely siblings
 (dev-api, api2, staging.api ...). Generating candidates is offline work, but
 RESOLVING them sends DNS queries, so stage.py only calls this when the scan
-mode allows it (ctx.allows("standard")). Resolution and wildcard filtering
+mode allows it (ctx.allows("active")). Resolution and wildcard filtering
 happen afterwards in resolver.py (R7); this module only produces names.
 
 alterx is used when installed. When it isn't, a small pure-Python generator

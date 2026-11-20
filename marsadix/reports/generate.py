@@ -732,7 +732,7 @@ def _why_no_ports(data: dict) -> str:
     cdn = [a for a in assets if a.get("is_cdn")]
     reasons = []
     if mode == "passive":
-        reasons.append("the scan ran in passive mode, which never sends traffic to the target (use --mode standard or full)")
+        reasons.append("the scan ran in passive mode, which never sends traffic to the target (use --mode active)")
     if cdn:
         reasons.append(f"{len(cdn)} of {len(assets)} host(s) are behind a CDN/WAF, and those are deliberately not port-scanned "
                        "(the open ports belong to the CDN, not to the target)")

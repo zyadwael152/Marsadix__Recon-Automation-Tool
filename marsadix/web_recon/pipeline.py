@@ -15,6 +15,7 @@ from typing import Iterable, Optional
 
 from marsadix import db
 from marsadix.core import limits
+from marsadix.core.config import normalize_mode
 from .archive import ArchiveCollector, host_sources
 from .config import Member2Config, load_member2_config
 from .crawler import BuiltinCrawler
@@ -151,7 +152,7 @@ async def _run_async(
                      max_concurrency=config.max_concurrency)
     target = scan["target"]
     scan_id = int(scan["id"])
-    effective_mode = str(mode or scan.get("mode") or "passive")
+    effective_mode = normalize_mode(mode or scan.get("mode") or "passive")   # old standard/full -> active
     scope = scope_obj or resolve_scope(scan, scope_path, mode=effective_mode)
     enforcer = ScopeEnforcer(scope, target, allow_private=config.allow_private,
                              dns_timeout=config.dns_timeout)
@@ -165,8 +166,7 @@ async def _run_async(
 
     report = WebPipelineReport(target=target, scan_id=scan_id, mode=effective_mode)
     collector = _Collector()
-    active_allowed = effective_mode in ("standard", "full")
-    full_allowed = effective_mode == "full"
+    active_allowed = effective_mode == "active"
 
     if not active_allowed:
         if check_status:
@@ -178,11 +178,7 @@ async def _run_async(
         check_status = False
         crawl = False
         discover_hosts = False
-    elif not full_allowed:
-        if crawl:
-            report.skipped.append("crawling disabled: katana/builtin crawl is full-mode only")
-        crawl = False
-    extract_js = bool(config.extract_js and full_allowed)
+    extract_js = bool(config.extract_js and active_allowed)
 
     # ------------------------------------------------------------- existing data
     existing_rows = db.get_web_items(conn, scan_id)

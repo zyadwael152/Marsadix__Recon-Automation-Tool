@@ -29,7 +29,7 @@ from typing import Optional
 from .. import db
 from ..models import Scan, ScanMode, ScanStatus
 from . import limits, toolstatus
-from .config import SCAN_MODES, Config, ConfigError
+from .config import SCAN_MODES, Config, ConfigError, normalize_mode
 from .loader import load_callable
 from .scope import Scope, ScopeError, normalize_host
 
@@ -82,19 +82,19 @@ class Context:
 
     @property
     def mode(self) -> str:
-        """This run's mode: "passive" | "standard" | "full" (C15)."""
+        """This run's mode: "passive" | "active" (C15)."""
         m = self.scan.mode
-        return getattr(m, "value", m)
+        return normalize_mode(getattr(m, "value", m))
 
     def allows(self, minimum: str) -> bool:
         """
         True if this run's mode is at least `minimum`. Stages that contact the
         target must gate themselves on this:
 
-            if not ctx.allows("standard"):   # passive: no contact with the target
+            if not ctx.allows("active"):     # passive: no contact with the target
                 return {"skipped": "..."}
         """
-        return SCAN_MODES.index(self.mode) >= SCAN_MODES.index(minimum)
+        return SCAN_MODES.index(self.mode) >= SCAN_MODES.index(normalize_mode(minimum))
 
     def in_scope(self, host: str) -> bool:
         return self.scope.is_in_scope(host)
@@ -114,7 +114,7 @@ def run_scan(target: str, config: Config, scope: Optional[Scope] = None,
     """
     Create a scan, run every available stage, store the outcome.
 
-    `scope` (C15): required for "standard" and "full", which send traffic to the
+    `scope` (C15): required for "active", which sends traffic to the
     target; ScopeError otherwise. Only "passive" may fall back to a scope
     derived from the target itself (target + its subdomains). `scope_file` is
     the path the scope was loaded from; it is stored on the scan record so a
@@ -123,7 +123,8 @@ def run_scan(target: str, config: Config, scope: Optional[Scope] = None,
     `rate_limit`: max requests per second sent to the target; must be >= 1
     (httpx/katana treat 0 as "unlimited", which is never what a typo meant).
 
-    `mode` (C15): "passive" | "standard" | "full". Defaults to config.scan_mode.
+    `mode` (C15): "passive" | "active" (the old "standard"/"full" mean "active").
+    Defaults to config.scan_mode.
     This is stored on the Scan record (ctx.scan.mode) and on ctx.config.scan_mode
     for the duration of this run; stage authors (recon/web/asm) are expected to
     check it before doing anything more intrusive than the mode allows -- the
@@ -137,7 +138,7 @@ def run_scan(target: str, config: Config, scope: Optional[Scope] = None,
     if not host:
         raise ScopeError(f"invalid target: {target!r}")
 
-    resolved_mode = config.scan_mode if mode is None else mode
+    resolved_mode = normalize_mode(config.scan_mode if mode is None else mode)
     if resolved_mode not in SCAN_MODES:
         raise ConfigError(f"mode must be one of {SCAN_MODES}, got {resolved_mode!r}")
 

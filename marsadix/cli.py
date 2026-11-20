@@ -20,11 +20,12 @@ When you write your module, expose EXACTLY this function and the command works:
   graph     ->  marsadix/core/graph.py     : run_graph(conn, target, scan_id=None)
   scan      ->  stages, see core/pipeline.py
 
-scan --mode (C15): passive (default, no contact with the target) | standard
-(+ resolve/probe/ports) | full (+ active web checks, nuclei, injection
-detection). scan --allow-injection (A5) is a separate, explicit opt-in: a
-"full" scan does NOT run injection-style checks unless this flag is also
-given, and it requires an authorized scope.
+scan --mode (C15): passive (default: recon + archived URLs, no contact with
+the target) | active (+ HTTP probe, crawl, port scan, nmap, nuclei, custom
+checks). The old names "standard" and "full" still work and mean "active".
+scan --allow-injection (A5) is a separate, explicit opt-in: an "active" scan
+does NOT run injection-style checks unless this flag is also given, and it
+requires an authorized scope.
 """
 
 from __future__ import annotations
@@ -39,7 +40,7 @@ from typing import Optional, Sequence
 
 from . import db
 from .core.banner import print_banner
-from .core.config import SCAN_MODES, Config, ConfigError, load_config
+from .core.config import SCAN_MODES, Config, ConfigError, load_config, normalize_mode
 from .core.loader import load_callable
 from .core.log import setup_logging
 from .core.pipeline import run_scan
@@ -65,8 +66,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--scope", metavar="FILE", help="scope.txt (default: target + its subdomains)")
     s.add_argument("--depth", type=int, help="recursion depth limit")
     s.add_argument("--rate", type=int, help="requests per second")
-    s.add_argument("--mode", choices=list(SCAN_MODES), default=None,
-                   help="passive (default) | standard | full")
+    s.add_argument("--mode", type=normalize_mode, choices=list(SCAN_MODES), default=None,
+                   help="passive (default) | active")
     s.add_argument("--allow-injection", action="store_true",
                    help="explicit opt-in for injection-style checks (XSS/SQLi/SSTI probes)")
 
@@ -110,7 +111,7 @@ def build_parser() -> argparse.ArgumentParser:
     iv.add_argument("--scan-id", type=int, help="defaults to the latest completed scan")
 
     sk = sub.add_parser("skills", help="list the detection skills (active / planned)")
-    sk.add_argument("--mode", choices=list(SCAN_MODES), default="full", help="show what would be active in this mode")
+    sk.add_argument("--mode", type=normalize_mode, choices=list(SCAN_MODES), default="active", help="show what would be active in this mode")
 
     bm = sub.add_parser("benchmark", help="measure recon coverage or detection quality")
     bsub = bm.add_subparsers(dest="bench", required=True)
@@ -151,7 +152,7 @@ def cmd_scan(a, cfg: Config) -> int:
         print(f"error: invalid target: {a.target!r}", file=sys.stderr)
         return 1
     scope = Scope.from_file(a.scope) if a.scope else None
-    if scope is None and (a.mode or cfg.scan_mode) == "passive":
+    if scope is None and normalize_mode(a.mode or cfg.scan_mode) == "passive":
         log.warning("no --scope given: using %s and *.%s", target, target)
 
     scan, results = run_scan(target, cfg, scope=scope, scope_file=a.scope, max_depth=a.depth,

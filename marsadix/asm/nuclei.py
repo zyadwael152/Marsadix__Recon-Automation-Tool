@@ -6,7 +6,7 @@ rate limit, timeout and scope/network-safety checks (A4).
 
 This module deliberately returns `Finding` models instead of writing SQL; the
 pipeline persists them through `marsadix.db.save_many`, preserving schema v3.
-Nuclei is active reconnaissance and must be called only for standard/full
+Nuclei is active reconnaissance and must be called only for active
 scans; the caller enforces that gate as well.
 """
 
@@ -34,6 +34,7 @@ from .errors import (
 )
 from .scope import ScopeEnforcer
 from .runtime import ToolResolver, run_tool
+from .cve_verify import verify_cve, apply_verification
 
 logger = logging.getLogger(__name__)
 
@@ -266,6 +267,22 @@ async def run_nuclei(targets: Iterable[str], scan_id: int, target: str,
         finding, group = _record_to_finding(record, scan_id, target, enforcer)
         if finding is None:
             continue
+
+        # ── CVE VERIFICATION (Marsadix Patch v1.0) ──────────────────────────
+        if getattr(finding, 'cve_id', None):
+            try:
+                _vr = verify_cve(finding.cve_id, str(finding.url))
+                finding = apply_verification(finding, _vr)
+                if finding is None:
+                    continue   # confirmed false positive
+            except Exception as _ve:
+                import logging as _lg
+                _lg.getLogger(__name__).debug(
+                    "CVE verification error for %s: %s",
+                    getattr(finding, "cve_id", "?"), _ve
+                )
+        # ─────────────────────────────────────────────────────────────────────
+
         key = finding.dedup_key
         if key in seen:
             continue

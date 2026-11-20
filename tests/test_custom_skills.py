@@ -191,7 +191,7 @@ def conn():
     return c
 
 
-def _ctx(conn, mode="full", allow=True, scope=None):
+def _ctx(conn, mode="active", allow=True, scope=None):
     scan = Scan(target="example.com", status=ScanStatus.RUNNING, mode=ScanMode(mode))
     scan.id = db.save_scan(conn, scan)
     return Context(conn=conn, scan=scan, scope=scope or Scope.from_target("example.com"),
@@ -215,10 +215,10 @@ def test_targets_are_scope_and_network_checked_deduplicated_and_capped(conn):
     assert [h.host for h in hosts] == ["a.example.com"]
 
 
-def test_nothing_runs_without_the_opt_in_and_standard_runs_only_the_low_traffic_skills(conn, lab):
+def test_injection_skills_run_only_with_the_opt_in_in_active_mode(conn, lab):
     base = f"http://127.0.0.1:{lab.server_address[1]}"
-    for mode, allow, expected in (("standard", True, {"git-env-exposure"}), ("full", False, {"git-env-exposure"}),
-                                  ("full", True, {"git-env-exposure", "xss", "sqli"})):
+    for mode, allow, expected in (("active", False, {"git-env-exposure"}),
+                                  ("active", True, {"git-env-exposure", "xss", "sqli"})):
         c = db.connect(":memory:")
         db.init_db(c)
         ctx = _ctx(c, mode, allow, Scope.from_lines(["127.0.0.1"]))
@@ -230,7 +230,7 @@ def test_nothing_runs_without_the_opt_in_and_standard_runs_only_the_low_traffic_
 
 def test_the_asm_stage_runs_the_custom_skills_even_when_nuclei_is_missing(conn, lab, monkeypatch, tmp_path):
     base = f"http://127.0.0.1:{lab.server_address[1]}"
-    ctx = _ctx(conn, "full", True, Scope.from_lines(["127.0.0.1"]))
+    ctx = _ctx(conn, "active", True, Scope.from_lines(["127.0.0.1"]))
     _web(ctx, "127.0.0.1", "127.0.0.1", [base + "/", base + "/xss?q=1"])
     monkeypatch.setenv("PATH", str(tmp_path))                      # no nuclei binary
     toolstatus.reset()
@@ -241,4 +241,4 @@ def test_the_asm_stage_runs_the_custom_skills_even_when_nuclei_is_missing(conn, 
 
 
 def test_passive_mode_sends_nothing(conn):
-    assert "standard or full" in asm_stage.run(_ctx(conn, "passive"))["skipped"]
+    assert "--mode active" in asm_stage.run(_ctx(conn, "passive"))["skipped"]

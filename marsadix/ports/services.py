@@ -1,7 +1,7 @@
 """
 Service names for well-known ports.
 
-In --mode standard the ports stage only knows WHICH ports are open, not what
+When nmap is not available the ports stage only knows WHICH ports are open, not what
 runs on them, so the name it records is the one the port number is registered
 under. That is a hint, not a reading: --mode full runs nmap, which asks the
 service itself.

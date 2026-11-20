@@ -19,6 +19,7 @@ import tempfile
 from typing import Optional, Sequence
 
 from marsadix import db
+from marsadix.core.config import SCAN_MODES, normalize_mode
 
 from . import __version__
 from .config import CRAWLER_BACKENDS, Member2Config, load_member2_config
@@ -273,8 +274,8 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("target", nargs="?", help="target (latest scan is used; a scan is created if needed)")
     r.add_argument("--scan-id", type=int, help="explicit scan id (target mismatch auto-resolves)")
     r.add_argument("--scope", metavar="FILE", help="scope file (needed for active scans if not stored)")
-    r.add_argument("--mode", choices=["passive", "standard", "full"],
-                   help="mode for a newly created scan (default: full with --scope, else passive)")
+    r.add_argument("--mode", type=normalize_mode, choices=list(SCAN_MODES),
+                   help="mode for a newly created scan (default: active with --scope, else passive)")
     r.add_argument("--seed", action="append", metavar="URL", help="extra seed URL (repeatable)")
     r.add_argument("--no-archive", action="store_true", help="do not query archive providers")
     r.add_argument("--archive-source", action="append",

@@ -116,7 +116,7 @@ def compute_score(inputs: AttackSurfaceInputs, previous: Optional[Dict[str, Any]
     discounted = sum(1 for f in open_f if w(f) < 1.0)
     if discounted:
         reasons.append(f"note: {discounted} CVE match(es) count at reduced weight (version unknown or unverified); "
-                       f"a --mode standard scan (nmap -sV) gives versions and confirms them")
+                       f"an --mode active scan (nmap -sV) gives versions and confirms them")
     score = round(max(0.0, min(100.0, 100.0 - sum(pens.values()))), 1)
     if not reasons:
         reasons.append("no open findings or exposure penalties")

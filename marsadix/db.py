@@ -281,6 +281,8 @@ def init_db(conn: sqlite3.Connection) -> None:
             f"(missing column '{table}.{column}').\n{_OUT_OF_DATE_MSG}")
 
     conn.executescript(SCHEMA_SQL)
+    # Scans stored when there were three modes: "standard" and "full" are now "active".
+    conn.execute("UPDATE scans SET mode='active' WHERE mode IN ('standard', 'full')")
     conn.commit()
 
     row = conn.execute("SELECT version FROM schema_info").fetchone()

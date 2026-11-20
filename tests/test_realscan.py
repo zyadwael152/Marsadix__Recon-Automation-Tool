@@ -209,7 +209,7 @@ def test_a_program_in_a_path_folder_is_found_and_run(tmp_path, monkeypatch):
 
 
 def _report_data(**kw):
-    base = {"scan": {"id": 1, "mode": "standard"}, "target": "example.com", "assets": [], "services": [],
+    base = {"scan": {"id": 1, "mode": "active"}, "target": "example.com", "assets": [], "services": [],
             "technologies": [], "web_items": [], "findings": []}
     base.update(kw)
     return base

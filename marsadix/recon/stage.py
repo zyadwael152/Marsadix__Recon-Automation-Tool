@@ -89,7 +89,7 @@ def run(ctx, *args, **kwargs) -> dict:
     cfg = getattr(ctx, "config", None)
     in_scope = getattr(ctx, "in_scope", None)
     allows = getattr(ctx, "allows", None)
-    allows_std = callable(allows) and allows("standard")
+    allows_active = callable(allows) and allows("active")
     rate_limit = getattr(cfg, "rate_limit", None)
     dns_rate = getattr(cfg, "dns_rate_limit", None) or None
     wordlist = getattr(cfg, "bruteforce_wordlist", None) or None
@@ -104,7 +104,7 @@ def run(ctx, *args, **kwargs) -> dict:
     raw_results = discover_subdomains(target, api_keys, max_depth=max_depth)
 
     # 2. R5 + R6: Permutations and Bruteforce
-    if allows_std:
+    if allows_active:
         raw_results = asyncio.run(_expand_candidates(ctx, target, raw_results))
     else:
         logger.info("[-] Skipping permutations / DNS bruteforce (passive mode).")
@@ -174,10 +174,10 @@ def run(ctx, *args, **kwargs) -> dict:
     # VHost discovery remains here because it depends on the resolved IPs from
     # recon, but it is stored as asset evidence instead of silently discarded.
     # Port scanning and HTTP probing are owned by their dedicated pipeline stages
-    # to avoid duplicate requests in --mode full.
+    # to avoid duplicate requests in --mode active.
     # VHost fuzzing builds "<word>.<target>" host names, which only makes sense
     # for a domain target (an IP target would produce "word.1.2.3.4").
-    if allows_std and wordlist and valid_hostname(target):
+    if allows_active and wordlist and valid_hostname(target):
         non_cdn_public_ips = sorted({
             info["ip"] for host, info in active_results.items()
             if info.get("ip") and host_ok(host)

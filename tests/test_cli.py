@@ -91,12 +91,19 @@ def _scope_file(tmp_path):
 
 def test_scan_accepts_explicit_mode(tmp_path, capsys):
     dbp = str(tmp_path / "t.db")
-    main(["--db", dbp, "scan", "example.com", "--mode", "full", "--scope", _scope_file(tmp_path)])
+    main(["--db", dbp, "scan", "example.com", "--mode", "active", "--scope", _scope_file(tmp_path)])
     out = capsys.readouterr().out
-    assert "[mode=full]" in out
+    assert "[mode=active]" in out
 
 
-@pytest.mark.parametrize("mode", ["standard", "full"])
+@pytest.mark.parametrize("old", ["standard", "full"])
+def test_scan_accepts_the_old_mode_names_as_active(tmp_path, capsys, old):
+    dbp = str(tmp_path / "t.db")
+    main(["--db", dbp, "scan", "example.com", "--mode", old, "--scope", _scope_file(tmp_path)])
+    assert "[mode=active]" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("mode", ["active"])
 def test_scan_active_mode_without_scope_is_refused(tmp_path, capsys, mode):
     dbp = tmp_path / "t.db"
     rc = main(["--db", str(dbp), "scan", "example.com", "--mode", mode])
@@ -251,14 +258,14 @@ def test_an_unusable_output_folder_is_an_error_message_not_a_traceback(tmp_path,
 def test_scan_accepts_a_scope_file_saved_as_utf16_by_powershell(tmp_path, capsys):
     f = tmp_path / "scope.txt"
     f.write_bytes("example.com\r\n*.example.com\r\n".encode("utf-16"))
-    rc = main(["--no-banner", "--db", str(tmp_path / "t.db"), "scan", "example.com", "--mode", "standard", "--scope", str(f)])
-    assert rc == 0 and "[mode=standard]" in capsys.readouterr().out
+    rc = main(["--no-banner", "--db", str(tmp_path / "t.db"), "scan", "example.com", "--mode", "active", "--scope", str(f)])
+    assert rc == 0 and "[mode=active]" in capsys.readouterr().out
 
 
 def test_a_garbage_scope_file_is_a_one_line_error(tmp_path, capsys):
     f = tmp_path / "scope.txt"
     f.write_bytes(b"example.com\n\xff\xfe\xfa\n")
-    rc = main(["--no-banner", "--db", str(tmp_path / "t.db"), "scan", "example.com", "--mode", "standard", "--scope", str(f)])
+    rc = main(["--no-banner", "--db", str(tmp_path / "t.db"), "scan", "example.com", "--mode", "active", "--scope", str(f)])
     err = capsys.readouterr().err
     assert rc == 1 and err.startswith("error: cannot read scope file") and "Traceback" not in err
 

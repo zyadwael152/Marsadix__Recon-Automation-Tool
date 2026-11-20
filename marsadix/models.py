@@ -46,9 +46,15 @@ class ScanStatus(str, Enum):
 
 class ScanMode(str, Enum):
     """How intrusive a scan is allowed to be. (C15)"""
-    PASSIVE = "passive"      # no direct contact with the target
-    STANDARD = "standard"    # + resolve, probe, port scan
-    FULL = "full"             # + active web checks, nuclei, injection detection
+    PASSIVE = "passive"      # recon + archived URLs; no direct contact with the target
+    ACTIVE = "active"        # + HTTP probe, crawl, port scan, nmap, nuclei, DNS bruteforce, custom skills
+
+    @classmethod
+    def _missing_(cls, value):
+        # Scans stored (or config written) when there were three modes.
+        if str(value).strip().lower() in ("standard", "full"):
+            return cls.ACTIVE
+        return None
 
 
 class Confidence(str, Enum):

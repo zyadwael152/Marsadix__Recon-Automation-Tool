@@ -2,12 +2,12 @@
 Ports stage: which ports are open on each in-scope host, and what runs on them.
 
     passive   -> skipped: scanning ports sends traffic to the target
-    standard  -> naabu: open ports among the top 100; service NAME is only the
-                 registered name of that port number (a guess, no banner was read;
-                 see services.py)
-    full      -> + nmap -sV on the open ports: product, version, banner, CPE
-                 (read from the service itself); products also become
-                 technologies so the CVE monitor can match them
+    active    -> naabu: open ports among the top 100, then nmap -sV on the open
+                 ports: product, version, banner, CPE (read from the service
+                 itself); products also become technologies so the CVE monitor
+                 can match them. If nmap is not installed the stage keeps the
+                 naabu result and the service NAME is only the registered name
+                 of that port number (a guess, no banner was read; see services.py)
 
 Rules this stage follows:
   * only hosts that are in scope (the stored flag AND the scope rules);
@@ -54,9 +54,9 @@ def _valid_ip(value) -> Optional[str]:
 def run(ctx, *args, **kwargs) -> dict:
     logger.info("=== Starting Ports stage (mode: %s) ===", ctx.mode)
 
-    if not ctx.allows("standard"):
+    if not ctx.allows("active"):
         reason = (f"mode '{ctx.mode}' makes no contact with the target "
-                  f"(use --mode standard or full to scan ports)")
+                  f"(use --mode active to scan ports)")
         logger.info("[-] Ports stage skipped: %s", reason)
         return {"skipped": reason}
 
@@ -114,10 +114,10 @@ def run(ctx, *args, **kwargs) -> dict:
     for host, ip in ips.items():
         db.update_asset_network(ctx.conn, scan_id, host, ip=ip)
 
-    # ---- full mode: ask each distinct IP's open ports what they are running
+    # ---- ask each distinct IP's open ports what they are running (nmap -sV)
     details: dict = {}               # (ip, port) -> nmap record
     nmap_note = None
-    if ports and ctx.allows("full"):
+    if ports:
         try:
             for ip, plist in sorted(ports_by_ip.items()):
                 if ip not in ips.values():
@@ -127,8 +127,6 @@ def run(ctx, *args, **kwargs) -> dict:
         except ToolNotFound as e:
             nmap_note = str(e)
             logger.warning("[-] Service detection skipped: %s (keeping port names only)", e)
-    elif ports:
-        logger.info("[*] Service/version detection skipped: nmap only runs in --mode full")
 
     services, technologies = [], []
     for host, plist in sorted(ports.items()):
