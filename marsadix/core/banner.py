@@ -20,14 +20,14 @@ THEME = "blood"                 # blood | matrix | ocean | violet
 NAME = "MARSADIX"
 TAGLINE = "Recon & Vuln Engine"
 SUBLINE = "recon + asm + cve monitor"
-WARNING = "authorized targets only - you are responsible for your scans"
+WARNING = "authorized targets only"
 
-# 256-color gradients, one color per art row (dark at the top -> bright at the bottom).
+# 256-color themes: accent = emblem/name, text = main text, dim = lines/labels.
 THEMES = {
-    "blood":  {"art": [52, 88, 124, 160, 196], "accent": 196, "text": 250, "dim": 240},
-    "matrix": {"art": [22, 28, 34, 40, 46],    "accent": 46,  "text": 250, "dim": 240},
-    "ocean":  {"art": [24, 31, 38, 45, 51],    "accent": 45,  "text": 250, "dim": 240},
-    "violet": {"art": [54, 91, 128, 165, 201], "accent": 201, "text": 250, "dim": 240},
+    "blood":  {"accent": 196, "text": 252, "dim": 244},
+    "matrix": {"accent": 46,  "text": 252, "dim": 244},
+    "ocean":  {"accent": 45,  "text": 252, "dim": 244},
+    "violet": {"accent": 201, "text": 252, "dim": 244},
 }
 
 # Kept for backward compatibility with older code that imports these names.
@@ -35,29 +35,15 @@ ART_COLOR = "red"
 TAGLINE_COLOR = "cyan"
 
 # ---------------------------------------------------------------- the art
-# Pure ASCII on purpose: works on every Windows console encoding.
-# Each letter is 5 columns x 5 rows. Change NAME above and the art rebuilds itself.
-_GLYPHS = {
-    "A": [" ### ", "#   #", "#####", "#   #", "#   #"],
-    "D": ["#### ", "#   #", "#   #", "#   #", "#### "],
-    "I": ["#####", "  #  ", "  #  ", "  #  ", "#####"],
-    "M": ["#   #", "## ##", "# # #", "#   #", "#   #"],
-    "R": ["#### ", "#   #", "#### ", "#  # ", "#   #"],
-    "S": [" ####", "#    ", " ### ", "    #", "#### "],
-    "X": ["#   #", " # # ", "  #  ", " # # ", "#   #"],
-}
-
-
-def _build_art(text: str, gap: int = 2) -> list[str]:
-    rows = [""] * 5
-    for ch in text.upper():
-        glyph = _GLYPHS.get(ch, ["     "] * 5)
-        for i in range(5):
-            rows[i] += glyph[i] + " " * gap
-    return [r.rstrip() for r in rows]
-
-
-ART = _build_art(NAME)
+# A small radar / crosshair. Pure ASCII on purpose: works on every Windows
+# console encoding. The 'O' in the middle is painted in a different color.
+ART = [
+    r"    .-----.    ",
+    r"  .' \ | / '.  ",
+    r" |---- O ----| ",
+    r"  '. / | \ .'  ",
+    r"    '-----'    ",
+]
 
 _RESET = "\033[0m"
 
@@ -107,34 +93,32 @@ def supports_color(stream: TextIO) -> bool:
 
 def render(use_color: bool = True) -> str:
     t = THEMES.get(THEME, THEMES["blood"])
-    width = max(len(r) for r in ART)
-    rule = "-" * max(width, 52)
+
+    def P(text, key, bold=False):
+        return _paint(text, t[key], bold, use_color)
+
+    # emblem: accent color, with the center dot in the text color
+    emblem = []
+    for row in ART:
+        painted = P(row, "accent", True)
+        if "O" in row:
+            painted = painted.replace("O", (_RESET + _fg(t["text"], True) + "O" + _RESET + _fg(t["accent"], True))
+                                      if use_color else "O")
+        emblem.append(painted)
+
+    name = " ".join(NAME)
+    rule = "-" * 34
+    right = [
+        P(name, "accent", True),
+        P(rule, "dim"),
+        P(TAGLINE, "text", True) + "  " + P(f"v{version()}", "dim"),
+        P(SUBLINE, "dim"),
+        P("[!] ", "accent", True) + P(WARNING, "text"),
+    ]
 
     lines = [""]
-    # prompt line, like a shell session
-    lines.append("  " + _paint("root", t["accent"], True, use_color)
-                 + _paint("@", t["dim"], False, use_color)
-                 + _paint("marsadix", t["text"], True, use_color)
-                 + _paint(":~# ", t["dim"], False, use_color)
-                 + _paint("./recon --start", t["text"], False, use_color))
-    lines.append("")
-
-    # gradient art
-    for row, color in zip(ART, t["art"]):
-        lines.append("  " + _paint(row, color, True, use_color))
-
-    lines.append("  " + _paint(rule, t["dim"], False, use_color))
-
-    def tag(sym: str, label: str, value: str) -> str:
-        return ("  " + _paint(f"[{sym}]", t["accent"], True, use_color) + " "
-                + _paint(f"{label:<8}", t["dim"], False, use_color)
-                + _paint(value, t["text"], False, use_color))
-
-    lines.append(tag("*", "engine", f"{TAGLINE}"))
-    lines.append(tag("*", "version", f"v{version()}"))
-    lines.append(tag("*", "modules", SUBLINE))
-    lines.append(tag("!", "notice", WARNING))
-    lines.append("  " + _paint(rule, t["dim"], False, use_color))
+    for left, r in zip(emblem, right):
+        lines.append("  " + left + "   " + r)
     lines.append("")
     return "\n".join(lines)
 
