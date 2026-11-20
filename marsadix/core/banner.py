@@ -1,7 +1,7 @@
 """
 Startup banner (like msfconsole's), printed when you run `marsadix`.
 
-CHANGE THE LOOK HERE:  THEME = "blood"   (or "matrix", "ocean", "violet")
+CHANGE THE LOOK HERE:  THEME = "matrix"   (or "blood", "ocean", "violet")
 
 Rules:
   * printed to STDERR, so `marsadix report ... > file` or JSON output stays clean
@@ -20,7 +20,7 @@ import sys
 from typing import TextIO
 
 # ---------------------------------------------------------------- settings
-THEME = "blood"                 # blood | matrix | ocean | violet
+THEME = "matrix"                # blood | matrix | ocean | violet
 NAME = "MARSADIX"
 TAGLINE = "Recon & Vuln Engine"
 MOTTO = "watch the surface. find the gap."
@@ -125,7 +125,7 @@ def _paint_row(row: str, t: dict, use_color: bool, pop: str = "") -> str:
 
 
 def render(use_color: bool = True, width: int | None = None) -> str:
-    t = THEMES.get(THEME, THEMES["blood"])
+    t = THEMES.get(THEME, THEMES["matrix"])
     width = width if width is not None else _terminal_width()
 
     def P(text, key, bold=False):
