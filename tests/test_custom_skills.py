@@ -217,8 +217,8 @@ def test_targets_are_scope_and_network_checked_deduplicated_and_capped(conn):
 
 def test_nothing_runs_without_the_opt_in_and_standard_runs_only_the_low_traffic_skills(conn, lab):
     base = f"http://127.0.0.1:{lab.server_address[1]}"
-    for mode, allow, expected in (("standard", True, {"git-env-exposure"}), ("full", False, {"git-env-exposure"}),
-                                  ("full", True, {"git-env-exposure", "xss", "sqli"})):
+       for mode, allow, expected in (("active", False, {"git-env-exposure"}),
+                                  ("active", True, {"git-env-exposure", "xss", "sqli"})):
         c = db.connect(":memory:")
         db.init_db(c)
         ctx = _ctx(c, mode, allow, Scope.from_lines(["127.0.0.1"]))
