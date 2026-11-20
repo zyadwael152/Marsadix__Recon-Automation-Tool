@@ -1,8 +1,10 @@
 """Logging setup. Every module does:  log = logging.getLogger(__name__)
 
 Console output is colored when it goes to a real terminal:
-  * the line that starts each stage has its own color (see STAGE_COLORS)
-  * WARNING lines are orange, ERROR lines are red
+  * each stage start becomes a full-width separator line in the stage's own color:
+        ______ marsadix.core.pipeline: stage 'asm' started ______________
+  * the "=== Starting X stage ===" line is colored with the same stage color
+  * WARNING and ERROR lines are red (no stage uses red, so warnings always stand out)
 Colors are switched off automatically when output is piped / redirected to a
 file, when NO_COLOR is set, or when TERM=dumb.
 """
@@ -12,26 +14,33 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 
 FMT = "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
 DATEFMT = "%H:%M:%S"
 
-# CHANGE THE COLORS HERE (256-color codes, one per stage)
+# CHANGE THE COLORS HERE (256-color codes, one per stage). No red on purpose:
+# red is reserved for warnings and errors.
 STAGE_COLORS = {
-    "recon": 196,   # red
-    "web":   39,    # blue
+    "recon": 39,    # blue
+    "web":   45,    # cyan
     "ports": 220,   # yellow
     "asm":   207,   # pink
     "track": 46,    # green
-    "graph": 45,    # cyan
+    "graph": 141,   # purple
 }
 DEFAULT_STAGE_COLOR = 250
-WARNING_COLOR = 214
-ERROR_COLOR = 196
+WARNING_COLOR = 196          # red
+ERROR_COLOR = 196            # red (bold)
+
+SEPARATOR_CHAR = "_"         # the line drawn around the stage name
+SEPARATOR_LEFT = 6           # how many chars before the text
 
 _RESET = "\033[0m"
-# matches:  stage 'recon' started   and   === Starting Recon stage for target ... ===
-_START_RE = re.compile(r"stage '(\w+)' started|=== Starting (\w+) stage", re.I)
+# "stage 'recon' started"  (pipeline) -> full-width separator
+_STAGE_RE = re.compile(r"stage '(\w+)' started", re.I)
+# "=== Starting Recon stage for target ... ==="  (each stage) -> colored line
+_START_RE = re.compile(r"=== Starting (\w+) stage", re.I)
 
 
 def _fg(code: int, bold: bool = False) -> str:
@@ -46,14 +55,31 @@ class ColorFormatter(logging.Formatter):
         super().__init__(fmt, datefmt)
         self.use_color = use_color
 
+    def _separator(self, record: logging.LogRecord, stage: str) -> str:
+        """______ marsadix.core.pipeline: stage 'asm' started ______ (full width)."""
+        color = STAGE_COLORS.get(stage, DEFAULT_STAGE_COLOR)
+        text = f" {record.name}: {record.getMessage()} "
+        try:
+            width = shutil.get_terminal_size((80, 24)).columns - 1   # -1: never wrap
+        except Exception:
+            width = 79
+        left = SEPARATOR_CHAR * SEPARATOR_LEFT
+        right = SEPARATOR_CHAR * max(3, width - SEPARATOR_LEFT - len(text))
+        return ("\n" + _fg(color) + left + _RESET + _fg(color, True) + text + _RESET
+                + _fg(color) + right + _RESET)
+
     def format(self, record: logging.LogRecord) -> str:
         line = super().format(record)
         if not self.use_color:
             return line
-        m = _START_RE.search(record.getMessage())
+        msg = record.getMessage()
+        m = _STAGE_RE.search(msg)
         if m:
-            stage = (m.group(1) or m.group(2)).lower()
-            return f"{_fg(STAGE_COLORS.get(stage, DEFAULT_STAGE_COLOR), True)}{line}{_RESET}"
+            return self._separator(record, m.group(1).lower())
+        m = _START_RE.search(msg)
+        if m:
+            color = STAGE_COLORS.get(m.group(1).lower(), DEFAULT_STAGE_COLOR)
+            return f"{_fg(color, True)}{line}{_RESET}"
         if record.levelno >= logging.ERROR:
             return f"{_fg(ERROR_COLOR, True)}{line}{_RESET}"
         if record.levelno >= logging.WARNING:
