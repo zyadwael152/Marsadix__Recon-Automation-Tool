@@ -43,26 +43,25 @@ TAGLINE_COLOR = "cyan"
 # ---------------------------------------------------------------- the art
 # Pure ASCII on purpose: works on every Windows console encoding.
 LOGO = [
-    '##   ##  ####  #####   ####   ####  ####  #### ##  ##',
-    '### ### ###### ###### ###### ###### ##### #### ##  ##',
-    '####### ##  ## ##  ## ###    ##  ## ## ### ##  ##  ##',
-    '####### ##  ## ##  ##  ####  ##  ## ##  ## ##   #### ',
-    '## # ## ##  ## ## ##     ### ##  ## ##  ## ##   #### ',
-    '##   ## ###### #####  ##  ## ###### ## ### ##  ##  ##',
-    '##   ## ##  ## ## ### ###### ##  ## ##### #### ##  ##',
-    '##   ## ##  ## ##  ##  ####  ##  ## ####  #### ##  ##',
+    " ___  ___  ___  ______  _____  ___  ______ _____ __   __ ",
+    " |  \/  | / _ \ | ___ \/  ___|/ _ \ |  _  \_   _|\ \ / / ",
+    " | .  . |/ /_\ \| |_/ /\ `--./ /_\ \| | | | | |   \ V /  ",
+    " | |\/| ||  _  ||    /  `--. \  _  || | | | | |   /   \  ",
+    " | |  | || | | || |\ \ /\__/ / | | || |/ / _| |_ / /^\ \ ",
+    " \_|  |_/\_| |_/\_| \_|\____/\_| |_/|___/  \___/ \/   \/ ",
 ]
 
 # The hacker: hood + dark glasses. '#' = the lenses (painted white).
 HACKER = [
-    '       .-~~~~~-.       ',
-    "   .'             '.   ",
-    '  /    .-------.    \\  ',
-    ' |   /           \\   | ',
-    ' |   | [##]-[##] |   | ',
-    ' |   |    ___    |   | ',
-    ' |   \\           /   | ',
-    "  \\    '-------'    /  ",
+    "        .-~~~~~~~-.        ",
+    "      .'           '.      ",
+    "     /   .-------.   \     ",
+    "    |   /         \   |    ",
+    "    |   | [##]-[##] |   |    ",
+    "    |   |    ___    |   |    ",
+    "   /    \         /    \   ",
+    "  /      '-------'      \  ",
+    " /   /               \   \ ",
 ]
 
 # Small radar logo, used when the terminal is too narrow for the big one.
@@ -160,9 +159,7 @@ def render(use_color: bool = True, width: int | None = None) -> str:
 
     # ---------- wide terminal: big logo + hacker with glasses
     if width >= FULL_W + 5:
-        hexs = " ".join(f"{ord(c):02X}" for c in NAME)
-        head = f"[ {hexs} ]"
-        bar_top = P(head, "dim") + " " + P("-" * (FULL_W - len(head) - 1), "dim")
+        bar_top = P("-" * FULL_W, "dim")
         bar_bot = P("-" * FULL_W, "dim")
         pad = (len(HACKER) - len(LOGO)) // 2          # center the logo next to the hacker
         logo = [" " * LOGO_W] * pad + LOGO + [" " * LOGO_W] * (len(HACKER) - len(LOGO) - pad)
