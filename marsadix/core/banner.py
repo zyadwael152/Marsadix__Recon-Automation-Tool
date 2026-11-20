@@ -8,8 +8,7 @@ Rules:
   * only shown in a real terminal (never when piped / in cron / in tests)
   * respects the NO_COLOR environment variable and `marsadix --no-banner`
   * adapts to the terminal width:
-      >= 84 columns  -> big logo + hacker with glasses
-      >= 62 columns  -> big logo only
+      >= 71 columns  -> big MARSADIX logo
       otherwise      -> small radar logo
 """
 
@@ -41,26 +40,14 @@ ART_COLOR = "red"
 TAGLINE_COLOR = "cyan"
 
 # ---------------------------------------------------------------- the art
-# Pure ASCII on purpose: works on every Windows console encoding.
+# Unicode block characters for crisp pixel-style logo art.
 LOGO = [
-    r"  __  __    ___    ____    ____      _     ____    ___  __  __",
-    r" |  \/  |  / _ \  |  _ \  / ___|    / \   |  _ \  |_ _| \ \/ /",
-    r" | |\/| | / /_\ \ | |_) | \___ \   / _ \  | | | |  | |   \  / ",
-    r" | |  | |/ / _ \ \|  _ <   ___) | / ___ \ | |_| |  | |   /  \ ",
-    r" |_|  |_/_/   \_\_\_| \_\ |____/ /_/   \_\|____/  |___| /_/\_\ ",
-]
-
-# The hacker: hood + dark glasses + mask. '#' = the lenses (painted white).
-HACKER = [
-    r"         .-----------.         ",
-    r"       .'   /     \   '.       ",
-    r"     .'    /       \    '.     ",
-    r"    |     |=========|     |    ",
-    r"    |     |[##]---[##]|     |    ",
-    r"    |      \  -----  /      |    ",
-    r"     \      \       /      /     ",
-    r"    .-'      '-----'      '-.  ",
-    r"   /   /                 \   \ ",
+    r"███╗   ███╗ █████╗ ██████╗ ███████╗ █████╗ ██████╗ ██╗██╗  ██╗",
+    r"████╗ ████║██╔══██╗██╔══██╗██╔════╝██╔══██╗██╔══██╗██║╚██╗██╔╝",
+    r"██╔████╔██║███████║██████╔╝███████╗███████║██║  ██║██║ ╚███╔╝ ",
+    r"██║╚██╔╝██║██╔══██║██╔══██╗╚════██║██╔══██║██║  ██║██║ ██╔██╗ ",
+    r"██║ ╚═╝ ██║██║  ██║██║  ██║███████║██║  ██║██████╔╝██║██╔╝ ██╗",
+    r"╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═════╝ ╚═╝╚═╝  ╚═╝",
 ]
 
 # Small radar logo, used when the terminal is too narrow for the big one.
@@ -74,9 +61,6 @@ SMALL_ART = [
 
 _RESET = "\033[0m"
 LOGO_W = max(len(r) for r in LOGO)
-HACKER_W = max(len(r) for r in HACKER)
-GAP = 3
-FULL_W = LOGO_W + GAP + HACKER_W          # logo + hacker side by side
 
 
 def _fg(code: int, bold: bool = False) -> str:
@@ -156,36 +140,16 @@ def render(use_color: bool = True, width: int | None = None) -> str:
     ver = P(f"v{version()}", "text", True)
     motto = P("> ", "accent", True) + P(MOTTO, "dim")
 
-    # ---------- wide terminal: big logo + hacker with glasses
-    if width >= FULL_W + 5:
-        bar_top = P("-" * FULL_W, "dim")
-        bar_bot = P("-" * FULL_W, "dim")
-        pad = (len(HACKER) - len(LOGO)) // 2          # center the logo next to the hacker
-        logo = [" " * LOGO_W] * pad + LOGO + [" " * LOGO_W] * (len(HACKER) - len(LOGO) - pad)
-        lines = ["", prompt, "", "  " + bar_top]
-        for l, h in zip(logo, HACKER):
-            lines.append("  " + _paint_row(l, t, use_color) + " " * GAP
-                         + _paint_row(h, t, use_color, pop="#"))
-        lines += [
-            "  " + bar_bot,
-            "  " + P(TAGLINE, "text", True) + P("  //  ", "dim") + ver + "    " + info_chips,
-            "  " + motto,
-            "  " + P("[!] ", "accent", True) + P(WARNING, "dim"),
-            "",
-        ]
-        return "\n".join(lines)
-
-    # ---------- medium terminal: big logo only
+    # ---------- standard/wide terminal: big MARSADIX logo only
     if width >= LOGO_W + 9:
         bar = P("-" * LOGO_W, "dim")
         lines = ["", prompt, "", "  " + bar]
         lines += ["  " + _paint_row(r, t, use_color) for r in LOGO]
         lines += [
             "  " + bar,
-            "  " + P(TAGLINE, "text", True) + P("  //  ", "dim") + ver,
-            "  " + info_chips,
+            "  " + P(TAGLINE, "text", True) + P("  //  ", "dim") + ver + "    " + info_chips,
             "  " + motto,
-            "  " + P("[!] ", "accent", True) + P("authorized targets only", "dim"),
+            "  " + P("[!] ", "accent", True) + P(WARNING, "dim"),
             "",
         ]
         return "\n".join(lines)
