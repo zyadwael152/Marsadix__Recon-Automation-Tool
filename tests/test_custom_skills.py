@@ -217,8 +217,11 @@ def test_targets_are_scope_and_network_checked_deduplicated_and_capped(conn):
 
 def test_injection_skills_run_only_with_the_opt_in_in_active_mode(conn, lab):
     base = f"http://127.0.0.1:{lab.server_address[1]}"
-    for mode, allow, expected in (("active", False, {"git-env-exposure"}),
-                                  ("active", True, {"git-env-exposure", "xss", "sqli"})):
+
+    for mode, allow, expected in (
+        ("active", False, {"git-env-exposure"}),
+        ("active", True, {"git-env-exposure", "xss", "sqli"}),
+    ):
         c = db.connect(":memory:")
         db.init_db(c)
         ctx = _ctx(c, mode, allow, Scope.from_lines(["127.0.0.1"]))
