@@ -51,14 +51,14 @@ def test_subdomains_hang_under_their_parent_in_the_graph():
     conn.close()
 
 
-def test_the_apex_node_is_created_when_it_is_not_an_asset():
+def test_a_missing_apex_is_not_invented_but_deeper_names_still_hang_under_their_parent():
     conn = db.connect(":memory:")
     db.init_db(conn)
-    scan = _scan(conn, ["ctf.0xnull.site"])
+    scan = _scan(conn, ["ctf.0xnull.site", "a.ctf.0xnull.site"])
     build_graph(conn, scan.id)
     nodes = {n["id"] for n in db.get_graph(conn, scan.id)["nodes"]}
-    assert f"subdomain:{ROOT}" in nodes
-    assert _contains(conn, scan.id) == {(f"subdomain:{ROOT}", "subdomain:ctf.0xnull.site")}
+    assert f"subdomain:{ROOT}" not in nodes
+    assert _contains(conn, scan.id) == {("subdomain:ctf.0xnull.site", "subdomain:a.ctf.0xnull.site")}
     conn.close()
 
 

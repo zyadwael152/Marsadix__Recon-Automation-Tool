@@ -50,8 +50,9 @@ class ToolResult:
 # tool name -> what Marsadix uses it for
 KNOWN_TOOLS = {
     "subfinder": "passive subdomain discovery",
-    "dnsx": "DNS resolution",
+    "dnsx": "DNS resolution (+ MX/TXT records for origin IP discovery)",
     "httpx": "probing + technology detection (ProjectDiscovery httpx)",
+    "whatweb": "technology detection (web stage, active mode)",
     "naabu": "port scanning",
     "nmap": "service/version detection + CPE",
     "katana": "crawling (URLs, JS files)",

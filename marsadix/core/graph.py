@@ -265,6 +265,13 @@ def _build_graph(conn, scan_id: int) -> dict:
             else:
                 edge(sub, cve, "affected_by")
 
+    # A verified origin IP is the real server behind a CDN: ip -origin_of-> subdomain.
+    for o in db.get_origin_ips(conn, scan_id):
+        if not o["verified"]:
+            continue
+        ip = node(_n_ip(o["ip"]), "ip", o["ip"], {"origin": True})
+        edge(ip, ensure_subdomain(o["host"]), "origin_of")
+
     # Hierarchy: root domain -> subdomain -> sub-subdomain ("contains"). Without
     # this the subdomains were only linked through the IP / ASN / CDN they share.
     scan_row = conn.execute("SELECT target FROM scans WHERE id=?", (scan_id,)).fetchone()
@@ -275,10 +282,8 @@ def _build_graph(conn, scan_id: int) -> dict:
         declared = {str(a["host"]).lower(): a["parent_host"] for a in assets
                     if "parent_host" in a.keys() and a["parent_host"]}
         pairs = [(p, h) for h in sorted(known)
-                 for p in [_parent_host(h, known, root, declared)] if p]
-        if any(p == root for p, _ in pairs):
-            ensure_subdomain(root)               # the apex may not be an asset of its own
-        for parent, child in pairs:
+                 for p in [_parent_host(h, known, root, declared)] if p and p in known]
+        for parent, child in pairs:        # a parent that is not a node of this scan is not invented
             edge(_n_subdomain(parent), _n_subdomain(child), "contains")
 
     conn.commit()

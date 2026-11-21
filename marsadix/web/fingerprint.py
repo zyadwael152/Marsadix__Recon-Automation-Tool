@@ -117,3 +117,77 @@ def normalize_cpe(cpe: Optional[str]) -> Optional[str]:
     parts = [p or "*" for p in cpe[len("cpe:/"):].split(":")]
     parts += ["*"] * (11 - len(parts))
     return "cpe:2.3:" + ":".join(parts[:11])
+
+
+# WhatWeb plugins that describe the page or the visitor, not a technology.
+_WHATWEB_NOISE = {
+    "ip", "country", "title", "cookies", "httponly", "secure", "uncommonheaders", "html5", "html",
+    "script", "email", "redirectlocation", "x-frame-options", "strict-transport-security",
+    "content-language", "meta-author", "passwordfield", "x-xss-protection", "x-ua-compatible",
+    "open-graph-protocol", "frame", "http-only",
+}
+
+
+def _plugin_values(plugin, key: str) -> list:
+    values = plugin.get(key) if isinstance(plugin, dict) else None
+    return [str(v).strip() for v in values if str(v).strip()] if isinstance(values, list) else []
+
+
+def parse_whatweb(plugins) -> list[tuple[str, Optional[str]]]:
+    """
+    WhatWeb's "plugins" object -> [(name, version)].
+
+        {"HTTPServer": {"string": ["nginx/1.18.0 (Ubuntu)"]}, "PHP": {"version": ["8.1.2"]},
+         "jQuery": {"version": ["3.6.0"]}, "Bootstrap": {}, "IP": {"string": ["1.2.3.4"]}}
+        -> [("nginx", "1.18.0"), ("PHP", "8.1.2"), ("jQuery", "3.6.0"), ("Bootstrap", None)]
+
+    Kept: the Server / X-Powered-By headers, products Marsadix knows (_KNOWN) and anything that
+    reports a version. Page details (title, country, cookies ...) are not technologies.
+    """
+    if not isinstance(plugins, dict):
+        return []
+    out: list[tuple[str, Optional[str]]] = []
+    for name, plugin in plugins.items():
+        key = str(name).strip().lower()
+        if key in ("httpserver", "x-powered-by"):
+            for value in _plugin_values(plugin, "string"):
+                out += parse_server_header(value)
+            continue
+        if key in _WHATWEB_NOISE or not key:
+            continue
+        versions = _plugin_values(plugin, "version")
+        if versions:
+            out.append((str(name).strip(), versions[0]))
+        elif key in _KNOWN:
+            out.append((str(name).strip(), None))
+    return merge_technologies(out)
+
+
+def merge_sourced(groups: dict) -> list[tuple[str, Optional[str], tuple]]:
+    """
+    {"httpx": [(name, version)], "whatweb": [...]} -> [(name, version, (sources ...))].
+
+    The same (name, version) seen by several tools becomes one entry that lists them all.
+    A version-less entry from one tool is folded into a versioned entry of the same name that
+    ANOTHER tool found (httpx says "nginx", whatweb says "nginx 1.18.0": that is one technology).
+    """
+    entries: dict = {}
+    for source, items in groups.items():
+        for name, version in items:
+            name = str(name).strip()
+            if not name:
+                continue
+            ent = entries.setdefault((name.lower(), version or ""), [name, version, []])
+            if source not in ent[2]:
+                ent[2].append(source)
+
+    for (lname, ver), ent in list(entries.items()):
+        if ver:
+            continue
+        versioned = [e for (l2, v2), e in entries.items() if l2 == lname and v2]
+        if versioned and not any(set(ent[2]) & set(e[2]) for e in versioned):
+            for e in versioned:
+                e[2].extend(src for src in ent[2] if src not in e[2])
+            ent.append("folded")
+
+    return [(ent[0], ent[1], tuple(ent[2])) for ent in entries.values() if len(ent) == 3]

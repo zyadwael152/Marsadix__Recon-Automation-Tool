@@ -325,6 +325,100 @@ async def run_httpx(domains: List[str], rate_limit: Optional[int] = None,
     return live
 
 
+WHATWEB_AGGRESSION = "1"          # 1 = stealthy: one request per target. 3+ makes extra requests per plugin.
+WHATWEB_CHUNK = 40                # targets per whatweb process (they are passed as arguments)
+
+
+def parse_whatweb_output(text: str) -> List[dict]:
+    """
+    whatweb --log-json prints a JSON array (some builds print one object per line, separated by commas).
+    Returns [{"url", "status_code", "ip", "plugins"}]; entries without a target or plugins are dropped.
+    """
+    text = (text or "").strip()
+    objects: list = []
+    try:
+        data = json.loads(text)
+        objects = data if isinstance(data, list) else [data]
+    except ValueError:
+        for line in text.splitlines():
+            line = line.strip().lstrip("[").rstrip(",]").strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                objects.append(json.loads(line))
+            except ValueError:
+                continue
+    out: List[dict] = []
+    for obj in objects:
+        if not isinstance(obj, dict):
+            continue
+        url = str(obj.get("target") or "").strip()
+        plugins = obj.get("plugins")
+        if not url or not isinstance(plugins, dict):
+            continue
+        status = obj.get("http_status")
+        ip_values = (plugins.get("IP") or {}).get("string") if isinstance(plugins.get("IP"), dict) else None
+        out.append({
+            "url": url,
+            "status_code": status if isinstance(status, int) else None,
+            "ip": str(ip_values[0]) if isinstance(ip_values, list) and ip_values else None,
+            "plugins": plugins,
+        })
+    return out
+
+
+async def run_whatweb(urls: List[str], rate_limit: Optional[int] = None,
+                      timeout: int = 300) -> List[dict]:
+    """
+    Fingerprint live web servers with WhatWeb. Sends traffic to the target: active mode only.
+
+    Returns [{"url", "status_code", "ip", "plugins"}], one per answered URL (see parse_whatweb_output).
+    WhatWeb has no requests-per-second option; --max-threads is derived from the rate limit
+    (about one thread per 5 req/s, at most 10), so this is a rough bound, like the other tools'.
+    """
+    import shutil
+
+    targets = [u for u in dict.fromkeys(urls or []) if str(u).lower().startswith(("http://", "https://"))]
+    if not targets:
+        return []
+    if shutil.which("whatweb") is None:
+        logger.info("[-] whatweb is not installed - technology detection with whatweb skipped.")
+        toolstatus.record("whatweb", "missing")
+        return []
+
+    threads = max(1, min(10, int(rate_limit or 10) // 5))
+    logger.info("[*] Running whatweb on %d live URL(s) (%d thread(s))...", len(targets), threads)
+    results: List[dict] = []
+    for i in range(0, len(targets), WHATWEB_CHUNK):
+        chunk = targets[i:i + WHATWEB_CHUNK]
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "whatweb", "-q", "--no-errors", "--color=never", "-a", WHATWEB_AGGRESSION,
+                "--max-threads", str(threads), "--log-json=-", *chunk,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=child_env(), **_SPAWN_EXTRA,
+            )
+            stdout, stderr, timed_out = await _communicate_with_partial(
+                process, b"", limits.cap_timeout(timeout))
+            _record_exec("whatweb", process, stdout, stderr, timed_out)
+            if timed_out:
+                logger.warning("[-] whatweb timed out after %ss - parsing %d partial output byte(s).",
+                               timeout, len(stdout))
+            results += parse_whatweb_output(stdout.decode(errors="replace"))
+        except FileNotFoundError:
+            logger.info("[-] whatweb is not installed - technology detection with whatweb skipped.")
+            toolstatus.record("whatweb", "missing")
+            return results
+        except Exception as e:
+            logger.error("[-] whatweb failed: %s", e)
+            toolstatus.record("whatweb", "failed", type(e).__name__)
+
+    logger.info("[+] whatweb fingerprinted %d URL(s).", len(results))
+    return results
+
+
 async def run_katana(urls: List[str], rate_limit: Optional[int] = None,
                      timeout: int = 300) -> List[str]:
     """Crawl live URLs with katana (JS parsing on, depth 2). Returns unique URLs found."""

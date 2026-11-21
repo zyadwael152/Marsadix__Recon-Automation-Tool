@@ -27,7 +27,7 @@ from ..core.scope import normalize_host
 from ..core.textfile import safe_filename
 from ..models import Confidence, DiscoverySource, Technology, WebItem, WebItemKind
 from . import fingerprint
-from .probe import run_gau, run_httpx, run_katana
+from .probe import run_gau, run_httpx, run_katana, run_whatweb
 
 logger = logging.getLogger(__name__)
 
@@ -84,22 +84,25 @@ def _endpoint_item(scan_id: int, url: str) -> WebItem:
 
 
 def _technologies(scan_id: int, host: str, record: dict) -> List[Technology]:
-    """Wappalyzer matches plus the Server header, for one host."""
-    found = fingerprint.merge_technologies(
-        fingerprint.parse_tech(record.get("tech")),
-        fingerprint.parse_server_header(record.get("webserver")),
-    )
+    """Wappalyzer matches, the Server header and WhatWeb's matches for one host; `source` says who saw each."""
+    found = fingerprint.merge_sourced({
+        "httpx": fingerprint.merge_technologies(
+            fingerprint.parse_tech(record.get("tech")),
+            fingerprint.parse_server_header(record.get("webserver")),
+        ),
+        "whatweb": record.get("whatweb") or [],
+    })
     return [
         Technology(
             scan_id=scan_id, host=host, name=name, version=version,
             cpe=fingerprint.cpe_for(name, version),
             category=fingerprint.category_for(name),
-            source="httpx",
+            source="+".join(sorted(sources)),
             # A version from a header or page is evidence, not proof (backports,
-            # masked banners). CONFIRMED needs a safe check.
-            confidence=Confidence.LIKELY if version else Confidence.POSSIBLE,
+            # masked banners). CONFIRMED needs a safe check. Two tools agreeing is enough for LIKELY.
+            confidence=Confidence.LIKELY if (version or len(sources) > 1) else Confidence.POSSIBLE,
         )
-        for name, version in found
+        for name, version, sources in found
     ]
 
 
@@ -190,6 +193,15 @@ def run(ctx, *args, **kwargs) -> dict:
     live_hosts = {normalize_host(u) for u in live_urls if normalize_host(u)}
     for host, score in compute_source_confidence(source_map, live_hosts).items():
         db.update_asset_confidence(ctx.conn, scan_id, host, score)
+
+    # WhatWeb: a second opinion on the technologies of every live, in-scope URL.
+    whatweb_by_url: Dict[str, list] = {}
+    if live_urls:
+        for rec in asyncio.run(run_whatweb(live_urls, rate, timeout=ctx.config.tool_timeout)):
+            if ctx.in_scope(rec["url"]):          # whatweb follows redirects: keep only in-scope answers
+                whatweb_by_url[_canonical(rec["url"])] = fingerprint.parse_whatweb(rec["plugins"])
+    for r in live:
+        r["whatweb"] = whatweb_by_url.get(_canonical(r["url"]), [])
 
     endpoints: List[str] = []
     if live_urls:

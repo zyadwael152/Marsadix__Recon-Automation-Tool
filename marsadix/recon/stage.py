@@ -10,6 +10,7 @@ from .permutation import generate_permutations
 from .bruteforce import bruteforce_subdomains
 from .revdns import reverse_dns_lookup          # R15
 from .vhost import discover_vhosts              # R16
+from .origin import discover_origin             # origin IP behind a CDN
 from .. import db
 from ..models import Asset, DiscoverySource
 from ..core import netguard
@@ -205,6 +206,17 @@ def run(ctx, *args, **kwargs) -> dict:
             db.save_many(ctx.conn, "assets", vhost_assets)
             for asset in vhost_assets:
                 db.save_asset_sources_many(ctx.conn, scan_id, asset.host, ["ffuf-vhost"])
+
+    # Origin IP behind a CDN. Candidates taken from the scan itself need no traffic;
+    # the DNS lookups (SPF / MX) and the verification request run in active mode only.
+    try:
+        origin_rows = discover_origin(
+            target, active_results, cdn_asn_info, host_ok=host_ok, verify=allows_active,
+            lookup_dns=allows_active)
+        if origin_rows:
+            db.save_origin_ips(ctx.conn, scan_id, origin_rows)
+    except Exception as exc:        # an optional step must never fail the recon stage
+        logger.warning("[-] Origin IP discovery failed: %s", type(exc).__name__)
 
     log_missing_asset_hunter(ctx.conn, scan_id)
 

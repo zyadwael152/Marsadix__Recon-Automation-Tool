@@ -198,6 +198,21 @@ CREATE TABLE IF NOT EXISTS graph_edges (
     UNIQUE (src_id, dst_id, relation, scan_id)
 );
 
+-- Origin IP discovery: addresses that may be the real server behind a CDN / WAF.
+-- verified = 1 only when a request to that IP (with the host name as Host header)
+-- answered like the public site did.
+CREATE TABLE IF NOT EXISTS origin_ips (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_id INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+    host TEXT NOT NULL,
+    ip TEXT NOT NULL,
+    source TEXT NOT NULL,             -- sibling:<host> | mx:<host> | spf (comma separated)
+    verified INTEGER NOT NULL DEFAULT 0,
+    evidence TEXT,
+    found_at TEXT NOT NULL,
+    UNIQUE (scan_id, host, ip)
+);
+
 CREATE INDEX IF NOT EXISTS idx_assets_scan   ON assets(scan_id);
 CREATE INDEX IF NOT EXISTS idx_asset_sources ON asset_sources(scan_id, host);
 CREATE INDEX IF NOT EXISTS idx_tech_name     ON technologies(name, version);
@@ -594,6 +609,26 @@ def get_neighbors(conn, node_id: str, scan_id: Optional[int] = None) -> list[dic
 
 
 # ------------------------------------------------------------------------- reads
+
+def save_origin_ips(conn, scan_id: int, rows: Iterable[dict]) -> int:
+    """Store origin IP candidates: [{"host", "ip", "source", "verified", "evidence"}]. Re-saving a row updates it."""
+    n = 0
+    for r in rows:
+        conn.execute(
+            "INSERT OR REPLACE INTO origin_ips (scan_id, host, ip, source, verified, evidence, found_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (scan_id, r["host"], r["ip"], r.get("source") or "", 1 if r.get("verified") else 0,
+             r.get("evidence") or "", utcnow()))
+        n += 1
+    conn.commit()
+    return n
+
+
+def get_origin_ips(conn, scan_id: int) -> list[sqlite3.Row]:
+    """Origin IP candidates of one scan, verified ones first."""
+    return conn.execute(
+        "SELECT * FROM origin_ips WHERE scan_id=? ORDER BY verified DESC, host, ip", (scan_id,)).fetchall()
+
 
 def get_technologies(conn, scan_id: Optional[int] = None) -> list[sqlite3.Row]:
     """All stored technologies (latest data per host/name) - what the CVE monitor watches."""

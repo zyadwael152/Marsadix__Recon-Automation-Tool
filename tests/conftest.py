@@ -141,3 +141,11 @@ def _no_real_dns_in_tests(monkeypatch):
     """The DNS skills ask the system resolvers; no test may do that unless it supplies its own fake server."""
     from marsadix.asm import dnsclient
     monkeypatch.setattr(dnsclient, "system_resolvers", lambda: [])
+
+
+@pytest.fixture(autouse=True)
+def _no_real_whatweb(monkeypatch):
+    """Tests must never launch the real whatweb (it would send traffic to the hosts the fakes 'found')."""
+    async def fake(urls, rate_limit=None, timeout=None):
+        return []
+    monkeypatch.setattr("marsadix.web.stage.run_whatweb", fake)
