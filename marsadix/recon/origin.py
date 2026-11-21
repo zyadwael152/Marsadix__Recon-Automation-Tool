@@ -8,6 +8,9 @@ Two steps.
        (mail., ftp., old. ... often skip the CDN)                        every mode, no traffic
      * the addresses of the MX hosts and the ip4:/ip6: parts of the SPF
        record (one DNS query through dnsx)                                active mode
+     * the other addresses of the /24 around the target's own non-CDN hosts, tested by
+       hakoriginfinder (no API key; it compares what each address answers for the target's
+       name with the public site)                                        active mode
 2. Verification (active mode only): one request to https://<ip>/ (then http://) with the
    target's name as SNI and Host header, compared with what the CDN-fronted site answers. An IP
    is "verified" when the status is not an error and the page has the same title, the same body or
@@ -25,6 +28,7 @@ import logging
 import re
 import socket
 import ssl
+import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
 
@@ -34,6 +38,7 @@ from ..core.runner import ToolNotFound, parse_json_lines, run_tool
 logger = logging.getLogger(__name__)
 
 MAX_CANDIDATES = 15           # addresses that are verified
+MAX_RANGES = 2                # /24 ranges handed to hakoriginfinder
 MAX_VERIFY_HOSTS = 3          # CDN-fronted host names compared against them
 MAX_BODY = 256 * 1024
 REQUEST_TIMEOUT = 6.0
@@ -106,6 +111,53 @@ def sibling_candidates(active_results: dict, cdn_asn_info: dict, skip_ips: Set[s
                 continue
             out.setdefault(ip, set()).add(f"sibling:{host}")
     return out
+
+
+def neighbour_ips(sibling_ips: Iterable[str], exclude: Iterable[str] = (), max_ranges: int = MAX_RANGES):
+    """([networks], [addresses]): the /24 around each IPv4 address, at most `max_ranges` of them."""
+    exclude = set(exclude)
+    nets: list = []
+    for ip in sorted(sibling_ips):
+        try:
+            addr = ipaddress.ip_address(ip)
+        except ValueError:
+            continue
+        if addr.version != 4:
+            continue
+        net = ipaddress.ip_network(f"{ip}/24", strict=False)
+        if net not in nets:
+            nets.append(net)
+        if len(nets) >= max_ranges:
+            break
+    return nets, [str(h) for net in nets for h in net.hosts() if str(h) not in exclude]
+
+
+def parse_hakoriginfinder(text: str) -> List[Tuple[str, str, str]]:
+    """[(ip, url, distance)] for the MATCH lines of hakoriginfinder ("MATCH https://1.2.3.4:443/ 0")."""
+    out: List[Tuple[str, str, str]] = []
+    for line in (text or "").splitlines():
+        parts = line.split()
+        if len(parts) < 2 or parts[0] != "MATCH":
+            continue
+        try:
+            ip = str(ipaddress.ip_address(urllib.parse.urlsplit(parts[1]).hostname or ""))
+        except ValueError:
+            continue
+        out.append((ip, parts[1], parts[2] if len(parts) > 2 and parts[2].isdigit() else ""))
+    return out
+
+
+def run_hakoriginfinder(host: str, ips: List[str], threads: int = 16, timeout: int = 300):
+    """[(ip, url, distance)] for the addresses that answer like the public site; None when the tool is missing."""
+    if not ips:
+        return []
+    try:
+        res = run_tool(["hakoriginfinder", "-h", f"https://{host}/", "-p", "80,443", "-t", str(threads)],
+                       timeout=timeout, input_text="\n".join(ips) + "\n")
+    except ToolNotFound:
+        logger.info("[-] hakoriginfinder is not installed - the range check was skipped.")
+        return None
+    return parse_hakoriginfinder(res.stdout)
 
 
 # ---------------------------------------------------------------- verification
@@ -184,7 +236,7 @@ def verify_candidates(host: str, ips: List[str], timeout: float = REQUEST_TIMEOU
 # ------------------------------------------------------------------- top level
 def discover_origin(target: str, active_results: dict, cdn_asn_info: dict, *,
                     host_ok: Optional[Callable[[str], bool]] = None, verify: bool = False,
-                    lookup_dns: bool = False,
+                    lookup_dns: bool = False, scan_ranges: bool = False,
                     timeout: float = REQUEST_TIMEOUT, max_candidates: int = MAX_CANDIDATES) -> List[dict]:
     """
     Rows for db.save_origin_ips: [{"host", "ip", "source", "verified", "evidence"}].
@@ -239,6 +291,27 @@ def discover_origin(target: str, active_results: dict, cdn_asn_info: dict, *,
             elif name == names[0]:
                 rows.append({"host": name, "ip": res["ip"], "source": ",".join(sorted(cand[res["ip"]])),
                              "verified": False, "evidence": ""})
+
+    if scan_ranges:
+        siblings = {ip for ip, src in cand.items() if any(x.startswith("sibling:") for x in src)}
+        nets, neighbours = neighbour_ips(siblings, exclude=skip_ips)
+        if neighbours:
+            logger.info("[*] Origin IP: hakoriginfinder on %s (%d address(es)).",
+                        ", ".join(str(n) for n in nets), len(neighbours))
+            matches = run_hakoriginfinder(names[0], neighbours)
+            by_key = {(r["host"], r["ip"]): r for r in rows}
+            for ip, url, distance in matches or []:
+                net = next((str(n) for n in nets if ipaddress.ip_address(ip) in n), "")
+                evidence = f"hakoriginfinder: {url} answered like the public site (distance {distance or '?'})"
+                row = by_key.get((names[0], ip))
+                if row is None:
+                    row = {"host": names[0], "ip": ip, "source": f"range:{net}", "verified": True, "evidence": evidence}
+                    rows.append(row)
+                    by_key[(names[0], ip)] = row
+                elif not row["verified"]:
+                    row.update(verified=True, evidence=evidence, source=row["source"] + f",range:{net}")
+                if row["evidence"] == evidence:
+                    logger.info("[+] Origin IP verified: %s serves %s (%s)", ip, names[0], row["source"])
     if not any(r["verified"] for r in rows):
         logger.info("[-] Origin IP: none of the candidates answered like the public site.")
     return rows

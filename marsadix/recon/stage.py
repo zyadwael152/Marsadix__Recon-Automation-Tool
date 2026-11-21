@@ -208,11 +208,11 @@ def run(ctx, *args, **kwargs) -> dict:
                 db.save_asset_sources_many(ctx.conn, scan_id, asset.host, ["ffuf-vhost"])
 
     # Origin IP behind a CDN. Candidates taken from the scan itself need no traffic;
-    # the DNS lookups (SPF / MX) and the verification request run in active mode only.
+    # the DNS lookups (SPF / MX), the verification request and the range check run in active mode only.
     try:
         origin_rows = discover_origin(
             target, active_results, cdn_asn_info, host_ok=host_ok, verify=allows_active,
-            lookup_dns=allows_active)
+            lookup_dns=allows_active, scan_ranges=allows_active)
         if origin_rows:
             db.save_origin_ips(ctx.conn, scan_id, origin_rows)
     except Exception as exc:        # an optional step must never fail the recon stage

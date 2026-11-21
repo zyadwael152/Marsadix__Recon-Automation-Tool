@@ -123,6 +123,65 @@ def test_active_mode_adds_spf_and_mx_candidates_and_verifies(monkeypatch):
     assert {r["ip"] for r in rows if not r["verified"]} == {MAIL, mx_ip}
 
 
+# ------------------------------------------------------------ hakoriginfinder
+SAMPLE_OUTPUT = """Redirect 301 to: https://acme.test/
+NOMATCH http://93.184.216.10:80/ 56290
+MATCH https://93.184.216.20:443/ 0
+NOMATCH https://93.184.216.21:443/ 19532
+MATCH http://93.184.216.30:80/ 3
+MATCH https://not-an-ip.example:443/ 1
+"""
+
+
+def test_hakoriginfinder_match_lines_are_parsed():
+    assert origin.parse_hakoriginfinder(SAMPLE_OUTPUT) == [
+        ("93.184.216.20", "https://93.184.216.20:443/", "0"), ("93.184.216.30", "http://93.184.216.30:80/", "3")]
+    assert origin.parse_hakoriginfinder("") == []
+
+
+def test_the_range_is_the_slash_24_of_the_targets_own_hosts():
+    nets, ips = origin.neighbour_ips([MAIL, "93.184.216.99", "2606:2800::1", "not-an-ip"], exclude={"93.184.216.1"})
+    assert [str(n) for n in nets] == ["93.184.216.0/24"]
+    assert len(ips) == 253 and "93.184.216.1" not in ips and "93.184.216.0" not in ips and "93.184.216.255" not in ips
+    assert len(origin.neighbour_ips(["1.1.1.1", "2.2.2.2", "3.3.3.3"])[0]) == origin.MAX_RANGES
+
+
+def test_the_tool_is_skipped_when_it_is_not_installed(monkeypatch):
+    def missing(*a, **k):
+        raise origin.ToolNotFound("hakoriginfinder")
+    monkeypatch.setattr(origin, "run_tool", missing)
+    assert origin.run_hakoriginfinder("example.com", ["1.2.3.4"]) is None
+    assert origin.run_hakoriginfinder("example.com", []) == []
+
+
+def test_range_matches_become_verified_rows_and_only_the_siblings_range_is_scanned(monkeypatch):
+    asked = {}
+
+    def fake_tool(host, ips, threads=16, timeout=300):
+        asked["host"], asked["ips"] = host, ips
+        return [("93.184.216.20", "https://93.184.216.20:443/", "0"), (MAIL, f"https://{MAIL}:443/", "1")]
+    monkeypatch.setattr(origin, "run_hakoriginfinder", fake_tool)
+    monkeypatch.setattr(origin, "verify_candidates",
+                        lambda host, ips, **kw: [{"ip": ip, "verified": False, "evidence": ""} for ip in ips])
+    monkeypatch.setattr(origin, "lookup_dns_records", lambda t: ([], []))
+
+    rows = origin.discover_origin("example.com", ACTIVE, INFO, verify=True, lookup_dns=True, scan_ranges=True)
+    assert asked["host"] == "example.com"
+    assert EDGE not in asked["ips"] and "93.184.216.20" in asked["ips"]
+    by_ip = {r["ip"]: r for r in rows}
+    assert by_ip["93.184.216.20"]["verified"] and by_ip["93.184.216.20"]["source"] == "range:93.184.216.0/24"
+    assert by_ip[MAIL]["verified"] and by_ip[MAIL]["source"].startswith("sibling:mail.example.com,range:")
+
+
+def test_the_range_check_is_off_unless_asked_for(monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("hakoriginfinder must not run")
+    monkeypatch.setattr(origin, "run_hakoriginfinder", boom)
+    monkeypatch.setattr(origin, "verify_candidates",
+                        lambda host, ips, **kw: [{"ip": ip, "verified": False, "evidence": ""} for ip in ips])
+    origin.discover_origin("example.com", ACTIVE, INFO, verify=True, lookup_dns=False)
+
+
 # --------------------------------------------------------------- storage + graph
 def test_origin_ips_are_stored_and_only_verified_ones_reach_the_graph():
     conn = db.connect(":memory:")

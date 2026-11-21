@@ -53,6 +53,7 @@ KNOWN_TOOLS = {
     "dnsx": "DNS resolution (+ MX/TXT records for origin IP discovery)",
     "httpx": "probing + technology detection (ProjectDiscovery httpx)",
     "whatweb": "technology detection (web stage, active mode)",
+    "hakoriginfinder": "origin IP discovery: compares nearby IP ranges with the public site (recon, active mode)",
     "naabu": "port scanning",
     "nmap": "service/version detection + CPE",
     "katana": "crawling (URLs, JS files)",
