@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Marsadix - external tools installer (Linux/macOS)
-# Usage: sudo ./install-tools.sh
+# Usage: sudo ./install-tools.sh [INSTALL_DIR]
 #
 set -uo pipefail
 
@@ -64,6 +64,15 @@ fi
 log_info "Updating system and installing base prerequisites..."
 $PKG_UPDATE
 $PKG_INSTALL curl wget git unzip file python3 python3-venv python3-pip nmap $BUILD_PKGS || log_warn "Some base packages may have failed to install"
+
+# WhatWeb: optional deep technology fingerprinting. Not required, so a failure
+# here is a warning and never adds to FAILED (the Docker build must not break on it).
+log_info "Installing WhatWeb (optional)..."
+if $PKG_INSTALL whatweb &>/tmp/marsadix_whatweb.log && command -v whatweb &>/dev/null; then
+    log_ok "whatweb installed."
+else
+    log_warn "whatweb not installed (see /tmp/marsadix_whatweb.log). Deep technology fingerprinting will be skipped. On macOS install it manually."
+fi
 
 # 3. Go: make sure a recent-enough version is present.
 MIN_GO_MINOR=21
@@ -255,6 +264,16 @@ for t in subfinder assetfinder chaos httpx katana dnsx naabu nuclei gau ffuf alt
         echo -e "  ${GREEN}[OK]${RESET}    $t"
     else
         echo -e "  ${RED}[FAIL]${RESET} $t"
+    fi
+done
+
+# Optional tools: reported, but they never fail the install.
+echo -e "${BLUE}=== Optional tools ===${RESET}"
+for t in whatweb; do
+    if command -v "$t" &>/dev/null; then
+        echo -e "  ${GREEN}[OK]${RESET}    $t"
+    else
+        echo -e "  ${YELLOW}[SKIP]${RESET}  $t (deep fingerprinting disabled)"
     fi
 done
 

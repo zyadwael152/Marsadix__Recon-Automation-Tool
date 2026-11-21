@@ -165,23 +165,37 @@ async def fetch_crtsh(domain: str) -> Tuple[str, Set[str]]:
     return "crt.sh", subdomains
 
 
-async def _async_discover_single(domain: str, api_keys: dict) -> Dict[str, List[str]]:
+async def _async_discover_single(domain: str, api_keys: dict, include_cli: bool = True) -> Dict[str, List[str]]:
+    """
+    Run every discovery source against one domain.
+
+    include_cli: run the four CLI enumerators (subfinder, assetfinder, amass,
+    findomain). These should only run ONCE, on the root domain. Running them
+    again on each discovered subdomain repeats the same work with no new
+    results, so recursion passes include_cli=False for deeper levels.
+    """
     vt_key = api_keys.get("virustotal")
     chaos_key = api_keys.get("chaos")
     otx_key = api_keys.get("alienvault")
 
-    tasks = [
-        run_cli_tool("subfinder", ["subfinder", "-d", domain, "-silent"], domain=domain),
-        run_cli_tool("assetfinder", ["assetfinder", "--subs-only", domain], domain=domain),
-        # تم رفع الـ timeout هنا إلى 300 ثانية (5 دقائق) لمنع تايم آوت Amass
-        run_cli_tool("amass", ["amass", "enum", "-passive", "-d", domain, "-silent"], timeout=300, domain=domain),
-        run_cli_tool("findomain", ["findomain", "-t", domain, "-q"], domain=domain),
+    cli_tasks = []
+    if include_cli:
+        cli_tasks = [
+            run_cli_tool("subfinder", ["subfinder", "-d", domain, "-silent"], domain=domain),
+            run_cli_tool("assetfinder", ["assetfinder", "--subs-only", domain], domain=domain),
+            # تم رفع الـ timeout هنا إلى 300 ثانية (5 دقائق) لمنع تايم آوت Amass
+            run_cli_tool("amass", ["amass", "enum", "-passive", "-d", domain, "-silent"], timeout=300, domain=domain),
+            run_cli_tool("findomain", ["findomain", "-t", domain, "-q"], domain=domain),
+        ]
+
+    api_tasks = [
         run_chaos(domain, chaos_key),
         fetch_crtsh(domain),
         fetch_alienvault(domain, otx_key),
         fetch_virustotal(domain, vt_key),
     ]
-    results = await asyncio.gather(*tasks)
+
+    results = await asyncio.gather(*cli_tasks, *api_tasks)
     tool_outputs = {tool_name: subs for tool_name, subs in results}
     return merge_and_track(tool_outputs)
 
@@ -235,6 +249,9 @@ async def _async_discover_recursive(domain: str, api_keys: dict, max_depth: int)
             break
 
         logger.info(f"[*] === Discovery depth {depth}/{effective_depth}: {len(targets_to_scan)} target(s) ===")
+        if depth > 1:
+            logger.info("[*] CLI enumerators already ran on the root domain; "
+                        "deeper levels use API sources only.")
 
         if len(targets_to_scan) > MAX_RECURSION_BATCH:
             dropped = len(targets_to_scan) - MAX_RECURSION_BATCH
@@ -244,7 +261,11 @@ async def _async_discover_recursive(domain: str, api_keys: dict, max_depth: int)
             toolstatus.record("recursion", "truncated", f"depth {depth}: {dropped} target(s) not expanded")
             targets_to_scan = set(sorted(targets_to_scan)[:MAX_RECURSION_BATCH])
 
-        tasks = [_async_discover_single(t, api_keys) for t in sorted(targets_to_scan)]
+        # CLI enumerators run only at depth 1, on the root domain (once per scan).
+        tasks = [
+            _async_discover_single(t, api_keys, include_cli=(depth == 1))
+            for t in sorted(targets_to_scan)
+        ]
         batch_results = await asyncio.gather(*tasks)
         scanned_targets.update(targets_to_scan)
 
@@ -262,7 +283,7 @@ async def _async_discover_recursive(domain: str, api_keys: dict, max_depth: int)
                     continue
                 if sub.count(".") > domain.count(".") + 3:
                     continue
-                               # Expand in-scope names even when first reported by a noisy
+                # Expand in-scope names even when first reported by a noisy
                 # enumerator. Recursion is already bounded by depth/batch and
                 # wildcard-zone checks; source-based suppression hid valid
                 # subdomains such as api.example.com reported by subfinder.
