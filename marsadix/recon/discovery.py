@@ -221,7 +221,7 @@ async def _async_discover_single(domain: str, api_keys: dict, include_cli: bool 
     if include_domain_apis:
         api_tasks += [
             run_chaos(domain, chaos_key),
-            fetch_alienvault(domain, otx_key),
+            # fetch_alienvault(domain, otx_key),   # disabled: anonymous tier always rate-limited
             fetch_virustotal(domain, vt_key),
         ]
 
