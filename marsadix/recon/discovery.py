@@ -101,7 +101,28 @@ async def run_chaos(domain: str, api_key: str = None) -> Tuple[str, Set[str]]:
 CRTSH_RETRY_WAITS = (3, 8)          # seconds before the 2nd and 3rd attempt (crt.sh often answers 502/503 under load)
 
 
+CRTSH_GAP_SECONDS = 2.0   # pause after each crt.sh call: it answers 429 to bursts of parallel queries
+_crtsh_gate = {"loop": None, "lock": None}
+
+
+def _crtsh_lock() -> asyncio.Lock:
+    """One crt.sh query at a time, per event loop (each scan runs its own loop)."""
+    loop = asyncio.get_running_loop()
+    if _crtsh_gate["loop"] is not loop:
+        _crtsh_gate["loop"] = loop
+        _crtsh_gate["lock"] = asyncio.Lock()
+    return _crtsh_gate["lock"]
+
+
 async def fetch_crtsh(domain: str) -> Tuple[str, Set[str]]:
+    """Serialized crt.sh query: parallel depth-2 calls were all rate-limited (429)."""
+    async with _crtsh_lock():
+        result = await _fetch_crtsh_once(domain)
+        await asyncio.sleep(CRTSH_GAP_SECONDS)
+        return result
+
+
+async def _fetch_crtsh_once(domain: str) -> Tuple[str, Set[str]]:
     subdomains = set()
     url = f"https://crt.sh/?q=%25.{domain}&output=json"
     logger.info(f"[*] Querying crt.sh for {domain}...")
