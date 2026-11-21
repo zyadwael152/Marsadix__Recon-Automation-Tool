@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 import re
 import urllib.error
 import urllib.request
@@ -165,14 +166,18 @@ async def fetch_crtsh(domain: str) -> Tuple[str, Set[str]]:
     return "crt.sh", subdomains
 
 
-async def _async_discover_single(domain: str, api_keys: dict, include_cli: bool = True) -> Dict[str, List[str]]:
+async def _async_discover_single(domain: str, api_keys: dict, include_cli: bool = True,
+                                 include_domain_apis: bool = True) -> Dict[str, List[str]]:
     """
-    Run every discovery source against one domain.
+    Run discovery sources against one domain.
 
-    include_cli: run the four CLI enumerators (subfinder, assetfinder, amass,
-    findomain). These should only run ONCE, on the root domain. Running them
-    again on each discovered subdomain repeats the same work with no new
-    results, so recursion passes include_cli=False for deeper levels.
+    include_cli: subfinder / assetfinder / findomain (and amass only when
+                 MARSADIX_AMASS=1). Only on the root domain, once per scan.
+    include_domain_apis: AlienVault, VirusTotal and chaos answer per domain.
+                 Asking them again for every subdomain only triggers rate
+                 limits (AlienVault returned 429 on every extra call), so
+                 they run on the root domain only. crt.sh runs on every
+                 target because it returns nested names under each one.
     """
     vt_key = api_keys.get("virustotal")
     chaos_key = api_keys.get("chaos")
@@ -183,17 +188,21 @@ async def _async_discover_single(domain: str, api_keys: dict, include_cli: bool 
         cli_tasks = [
             run_cli_tool("subfinder", ["subfinder", "-d", domain, "-silent"], domain=domain),
             run_cli_tool("assetfinder", ["assetfinder", "--subs-only", domain], domain=domain),
-            # تم رفع الـ timeout هنا إلى 300 ثانية (5 دقائق) لمنع تايم آوت Amass
-            run_cli_tool("amass", ["amass", "enum", "-passive", "-d", domain, "-silent"], timeout=300, domain=domain),
             run_cli_tool("findomain", ["findomain", "-t", domain, "-q"], domain=domain),
         ]
+        # amass is opt-in: it took 5 minutes and found 0 hosts on every run so far.
+        if os.environ.get("MARSADIX_AMASS") == "1":
+            cli_tasks.append(run_cli_tool(
+                "amass", ["amass", "enum", "-passive", "-d", domain, "-silent"],
+                timeout=300, domain=domain))
 
-    api_tasks = [
-        run_chaos(domain, chaos_key),
-        fetch_crtsh(domain),
-        fetch_alienvault(domain, otx_key),
-        fetch_virustotal(domain, vt_key),
-    ]
+    api_tasks = [fetch_crtsh(domain)]
+    if include_domain_apis:
+        api_tasks += [
+            run_chaos(domain, chaos_key),
+            fetch_alienvault(domain, otx_key),
+            fetch_virustotal(domain, vt_key),
+        ]
 
     results = await asyncio.gather(*cli_tasks, *api_tasks)
     tool_outputs = {tool_name: subs for tool_name, subs in results}
@@ -250,8 +259,8 @@ async def _async_discover_recursive(domain: str, api_keys: dict, max_depth: int)
 
         logger.info(f"[*] === Discovery depth {depth}/{effective_depth}: {len(targets_to_scan)} target(s) ===")
         if depth > 1:
-            logger.info("[*] CLI enumerators already ran on the root domain; "
-                        "deeper levels use API sources only.")
+            logger.info("[*] CLI enumerators and domain-level APIs already ran on the root domain; "
+                        "deeper levels use crt.sh only.")
 
         if len(targets_to_scan) > MAX_RECURSION_BATCH:
             dropped = len(targets_to_scan) - MAX_RECURSION_BATCH
@@ -261,9 +270,11 @@ async def _async_discover_recursive(domain: str, api_keys: dict, max_depth: int)
             toolstatus.record("recursion", "truncated", f"depth {depth}: {dropped} target(s) not expanded")
             targets_to_scan = set(sorted(targets_to_scan)[:MAX_RECURSION_BATCH])
 
-        # CLI enumerators run only at depth 1, on the root domain (once per scan).
+        # Root-only sources run at depth 1; deeper levels only ask crt.sh.
         tasks = [
-            _async_discover_single(t, api_keys, include_cli=(depth == 1))
+            _async_discover_single(t, api_keys,
+                                   include_cli=(depth == 1),
+                                   include_domain_apis=(depth == 1))
             for t in sorted(targets_to_scan)
         ]
         batch_results = await asyncio.gather(*tasks)
