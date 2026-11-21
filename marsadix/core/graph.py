@@ -100,6 +100,33 @@ def _n_finding(finding_id: int) -> str:
 # builder (G1 storage + G2 builder)
 # --------------------------------------------------------------------------
 
+def _parent_host(host: str, known: set, root: str, declared: Optional[dict] = None) -> Optional[str]:
+    """
+    The host a subdomain hangs under in the graph (the "contains" hierarchy).
+
+    1. the parent_host recorded for it, when that host is known and does not
+       create a loop;
+    2. otherwise the closest ancestor NAME that exists in this scan
+       (a.b.example.com -> b.example.com if b.example.com was found);
+    3. otherwise the root domain of the scan.
+
+    None for the root itself and for hosts that are not under the root.
+    """
+    host = host.lower().rstrip(".")
+    root = root.lower().rstrip(".")
+    if host == root or not host.endswith("." + root):
+        return None
+    d = ((declared or {}).get(host) or "").lower().rstrip(".")
+    if d and d != host and d in known and not d.endswith("." + host) and (d == root or d.endswith("." + root)):
+        return d
+    labels = host.split(".")
+    for i in range(1, len(labels)):
+        cand = ".".join(labels[i:])
+        if cand == root or cand in known:
+            return cand
+    return root
+
+
 def build_graph(conn, scan_id: int) -> dict:
     """
     Rebuild one scan's graph atomically.
@@ -175,7 +202,8 @@ def _build_graph(conn, scan_id: int) -> dict:
         tech_ids[(host, name)] = [tid]
         return [tid]
 
-    for a in db.get_assets(conn, scan_id):
+    assets = db.get_assets(conn, scan_id)
+    for a in assets:
         host = a["host"]
         sub = node(_n_subdomain(host), "subdomain", host,
                    {"in_scope": bool(a["in_scope"]), "confidence_score": a["confidence_score"]})
@@ -237,6 +265,22 @@ def _build_graph(conn, scan_id: int) -> dict:
             else:
                 edge(sub, cve, "affected_by")
 
+    # Hierarchy: root domain -> subdomain -> sub-subdomain ("contains"). Without
+    # this the subdomains were only linked through the IP / ASN / CDN they share.
+    scan_row = conn.execute("SELECT target FROM scans WHERE id=?", (scan_id,)).fetchone()
+    root = ((scan_row["target"] if scan_row else "") or "").lower().rstrip(".")
+    if root:
+        prefix = "subdomain:"
+        known = {n[len(prefix):].lower() for n in seen_nodes if n.startswith(prefix)}
+        declared = {str(a["host"]).lower(): a["parent_host"] for a in assets
+                    if "parent_host" in a.keys() and a["parent_host"]}
+        pairs = [(p, h) for h in sorted(known)
+                 for p in [_parent_host(h, known, root, declared)] if p]
+        if any(p == root for p, _ in pairs):
+            ensure_subdomain(root)               # the apex may not be an asset of its own
+        for parent, child in pairs:
+            edge(_n_subdomain(parent), _n_subdomain(child), "contains")
+
     conn.commit()
     return {"nodes": len(seen_nodes), "edges": len(seen_edges)}
 
@@ -294,6 +338,8 @@ def blast_radius(conn, scan_id: int, node_id: str, max_hops: int = 2) -> list[di
         next_frontier = []
         for nid in frontier:
             for nb in db.get_neighbors(conn, nid, scan_id):
+                if nb["relation"] == "contains":
+                    continue        # example.com "contains" a.example.com: a name, not a path an attacker follows
                 if nb["id"] in seen:
                     continue
                 seen.add(nb["id"])
