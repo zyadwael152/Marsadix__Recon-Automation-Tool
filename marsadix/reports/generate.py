@@ -236,7 +236,7 @@ MAX_GRAPH_NODES = 400
 # 960x620 board were thrown to its corners, hundreds of pixels apart. From about
 # 15 nodes up the canvas is the full 960x620 (so big graphs are laid out exactly
 # as before); below that it shrinks, keeping a roughly constant space per node.
-CANVAS_MAX = (960, 620)
+CANVAS_MAX = (2000, 1300)   # was 960x620: 400 nodes on the same board as 15 nodes
 CANVAS_MIN = (520, 330)
 AREA_PER_NODE = 40000       # px^2 of layout canvas per node
 
@@ -244,6 +244,79 @@ AREA_PER_NODE = 40000       # px^2 of layout canvas per node
 LABEL_CHAR_PX = 5.9         # approx. width of one character of the 9.5px bold label
 GRAPH_PAD = 24
 GRAPH_MIN_W, GRAPH_MIN_H = 640, 340   # a tiny graph is not blown up to fill the page
+
+
+FOLD_AT = 60          # above this many nodes, single-link nodes are folded under the asset they hang from
+
+
+def _fold_leaves(nodes: list[dict], edges: list[dict]) -> tuple[list[dict], list[dict], dict]:
+    """Fold nodes that have a single remaining link into the node they hang from
+    (technologies/findings under their subdomain, subdomains under their IP, ...),
+    repeatedly. Returns (drawn_nodes, edges_between_them, {asset_id: [folded nodes]}).
+    Nothing is dropped: the folded nodes are listed under the page's graph."""
+    if len(nodes) <= FOLD_AT:
+        return nodes, edges, {}
+    ids = {n["id"] for n in nodes}
+    nbrs: dict[str, set] = {i: set() for i in ids}
+    for e in edges:
+        a, b = e["src_id"], e["dst_id"]
+        if a in ids and b in ids and a != b:
+            nbrs[a].add(b)
+            nbrs[b].add(a)
+    deg = {i: len(v) for i, v in nbrs.items()}
+    alive = set(ids)
+    parent: dict[str, str] = {}
+    queue = sorted(i for i in ids if deg[i] == 1)
+    while queue:
+        u = queue.pop(0)
+        if u not in alive or deg[u] != 1:
+            continue
+        p = next((v for v in sorted(nbrs[u]) if v in alive), None)
+        if p is None:
+            continue
+        alive.discard(u)
+        parent[u] = p
+        deg[p] -= 1
+        if deg[p] == 1:
+            queue.append(p)
+
+    def root(i: str) -> str:
+        while i in parent:
+            i = parent[i]
+        return i
+
+    by_id = {n["id"]: n for n in nodes}
+    folded: dict[str, list] = {}
+    for u in parent:
+        folded.setdefault(root(u), []).append(by_id[u])
+    kept = [n for n in nodes if n["id"] in alive]
+    kept_edges = [e for e in edges if e["src_id"] in alive and e["dst_id"] in alive]
+    return kept, kept_edges, folded
+
+
+def _folded_details_html(folded: dict, by_id: dict, undrawn: list | None = None, names_per_asset: int = 25) -> str:
+    undrawn = undrawn or []
+    if not folded and not undrawn:
+        return ""
+    rows = []
+    for rid, members in sorted(folded.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+        kinds: dict[str, int] = {}
+        for m in members:
+            kinds[m["node_type"]] = kinds.get(m["node_type"], 0) + 1
+        summary = ", ".join(f"{c} {t}" for t, c in sorted(kinds.items()))
+        names = sorted(f'{m["label"]}' for m in members)
+        shown = ", ".join(_e(x) for x in names[:names_per_asset])
+        more = f" and {len(names) - names_per_asset} more (all of them are in the JSON report and in <code>marsadix graph</code>)" if len(names) > names_per_asset else ""
+        rows.append(f'<li><b>{_e(by_id[rid]["label"])}</b> ({_e(by_id[rid]["node_type"])}): {_e(summary)}'
+                    f'<br><span class="muted">{shown}{more}</span></li>')
+    if undrawn:
+        names = sorted(f'{m["node_type"]}: {m["label"]}' for m in undrawn)
+        extra = f" and {len(names) - 200} more (all are in the JSON report and in <code>marsadix graph</code>)" if len(names) > 200 else ""
+        rows.append(f'<li><b>Not drawn ({len(undrawn)})</b><br><span class="muted">{", ".join(_e(x) for x in names[:200])}{extra}</span></li>')
+    total = sum(len(v) for v in folded.values())
+    return (f'<details class="graph-folded"><summary>{total} node(s) are folded under {len(folded)} asset(s) '
+            f'(shown as +N on the graph)' + (f' and {len(undrawn)} more are not drawn' if undrawn else '') +
+            f'. Click to list them.</summary><ul>{"".join(rows)}</ul></details>')
 
 
 def _select_visible(nodes: list[dict], edges: list[dict],
@@ -399,11 +472,20 @@ def _render_graph_svg(graph: dict) -> str:
         return '<p class="muted">No graph data for this scan (recon/web/asm haven\'t run yet).</p>'
 
     total_nodes = len(nodes)
+    all_by_id = {n["id"]: n for n in nodes}
+    nodes, edges, folded = _fold_leaves(nodes, edges)
+    folded_note = (f'<p class="muted">{total_nodes} nodes: {len(nodes)} drawn, '
+                   f'{sum(len(v) for v in folded.values())} folded under their asset (+N badges, listed below the graph).</p>'
+                   ) if folded else ""
+    drawn_before_cap = len(nodes)
+    pre_cap = nodes
     nodes, edges, hidden = _select_visible(nodes, edges)
-    truncated_note = (
-        f'<p class="muted">Showing the {len(nodes)} most relevant of {total_nodes} nodes '
-        f'(findings, CVEs and best-connected nodes first). The full graph is in the JSON '
-        f'report and in <code>marsadix graph</code>.</p>') if hidden else ""
+    _kept = {n["id"] for n in nodes}
+    undrawn = [n for n in pre_cap if n["id"] not in _kept]
+    truncated_note = folded_note + ((
+        f'<p class="muted">+{hidden} more assets are not drawn: showing the {len(nodes)} most relevant of '
+        f'{drawn_before_cap} (findings, CVEs and best-connected first). The full graph is in the JSON '
+        f'report and in <code>marsadix graph</code>.</p>') if hidden else "")
 
     degree: dict[str, int] = {n["id"]: 0 for n in nodes}
     for e in edges:
@@ -416,9 +498,11 @@ def _render_graph_svg(graph: dict) -> str:
     # with no relationships doesn't need 50 overlapping text labels to be
     # readable -- hovering any dot still shows its name via <title>.
     always_label = {"cve", "finding", "asn", "cdn"}
+    # Big graphs: only hubs and important nodes carry a label (hover shows the rest).
+    hub_degree = 1 if len(nodes) <= 40 else max(4, round(len(nodes) ** 0.5 / 2))
     show_label_for = {
         n["id"] for n in nodes
-        if degree[n["id"]] > 0 or n["node_type"] in always_label or len(nodes) <= 15
+        if degree[n["id"]] >= hub_degree or n["node_type"] in always_label or len(nodes) <= 15 or n["id"] in folded
     }
 
     isolated = [n for n in nodes if degree[n["id"]] == 0]
@@ -457,8 +541,13 @@ def _render_graph_svg(graph: dict) -> str:
             label_w = 4 + len(label) * LABEL_CHAR_PX + 4        # gap + text + stroke halo
         min_x, max_x = min(min_x, x - r), max(max_x, x + r + label_w)
         min_y, max_y = min(min_y, y - max(r, 8)), max(max_y, y + max(r, 8))
+        badge_svg = ""
+        if n["id"] in folded:
+            badge_svg = (f'<circle r="{r + 4:.0f}" class="graph-ring"/>'
+                         f'<text x="0" y="{-(r + 7):.0f}" class="graph-badge">+{len(folded[n["id"]])}</text>')
         circles.append(f'''
         <g class="graph-node" transform="translate({x:.0f},{y:.0f})">
+          {badge_svg}
           <circle r="{r:.0f}" fill="var({var})" class="node-dot">
             <title>{_e(n["node_type"])}: {_e(n["label"])} ({degree[n["id"]]} link{"s" if degree[n["id"]] != 1 else ""})</title>
           </circle>
@@ -491,7 +580,8 @@ def _render_graph_svg(graph: dict) -> str:
       <rect x="{vb_x:.0f}" y="{vb_y:.0f}" width="{vb_w:.0f}" height="{vb_h:.0f}" fill="url(#graphBg)" rx="10"/>
       {"".join(lines)}
       {"".join(circles)}
-    </svg>'''
+    </svg>
+    {_folded_details_html(folded, all_by_id, undrawn)}'''
 
 
 # --------------------------------------------------------------------------
@@ -720,6 +810,11 @@ body.engagement .engagement-only { display:table-cell; }
 .graph-node:hover .node-dot { stroke:var(--accent); }
 .graph-label { font-size:9.5px; font-weight:600; fill:var(--text); pointer-events:none;
                paint-order:stroke; stroke:var(--surface); stroke-width:3px; }
+.graph-badge { font-size:9.5px; font-weight:700; fill:var(--accent); text-anchor:middle; pointer-events:none;
+               paint-order:stroke; stroke:var(--surface); stroke-width:3px; }
+.graph-ring { fill:none; stroke:var(--accent); stroke-width:1.2; stroke-dasharray:3 3; }
+.graph-folded { margin-top:10px; font-size:12.5px; }
+.graph-folded ul { padding-left:18px; } .graph-folded li { margin:6px 0; }
 .legend { display:flex; flex-wrap:wrap; gap:12px; margin-bottom:10px; font-size:12px; color:var(--muted); }
 .legend-item { display:flex; align-items:center; gap:5px; }
 .legend-item i { width:9px; height:9px; border-radius:50%; display:inline-block; }

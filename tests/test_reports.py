@@ -148,8 +148,19 @@ def test_graph_svg_for_large_graph_is_fast_and_says_it_was_truncated():
 
     # the all-pairs layout needed ~25 s for 480 nodes; this must stay far below that
     assert elapsed < 10, f"graph layout too slow: {elapsed:.1f}s"
-    assert f"Showing the {MAX_GRAPH_NODES} most relevant of 1500 nodes" in svg
+    assert "more assets are not drawn" in svg and "of 750 (findings" in svg   # 750 folded, 350 over the cap
     assert svg.count('class="graph-node"') == MAX_GRAPH_NODES
+
+
+def test_graph_svg_fold_drops_nothing():
+    """Every node is either drawn, folded under an asset, or listed as not drawn."""
+    from marsadix.reports.generate import _render_graph_svg
+    g = _fake_graph(1500)
+    svg = _render_graph_svg(g)
+    drawn = svg.count('class="graph-node"')
+    folded = int(__import__("re").search(r"(\d+) node\(s\) are folded", svg).group(1))
+    undrawn = int(__import__("re").search(r"and (\d+) more are not drawn", svg).group(1))
+    assert drawn + folded + undrawn == 1500
 
 
 def test_graph_svg_small_graph_is_not_truncated():
@@ -288,10 +299,11 @@ def test_a_graph_of_only_unlinked_nodes_is_centred_not_in_the_corners():
     assert max(xs) - min(xs) < 400 and max(ys) - min(ys) < 100   # one tidy row
 
 
-def test_graph_canvas_grows_with_node_count_and_caps_at_the_old_size():
-    from marsadix.reports.generate import _canvas_size
-    assert _canvas_size(3)[0] < _canvas_size(8)[0] < _canvas_size(14)[0]
-    assert _canvas_size(15) == (960, 620) == _canvas_size(5000)
+def test_graph_canvas_grows_with_node_count_and_caps_at_the_max_size():
+    from marsadix.reports.generate import _canvas_size, CANVAS_MAX
+    assert _canvas_size(3)[0] < _canvas_size(8)[0] < _canvas_size(14)[0] < _canvas_size(100)[0]
+    assert _canvas_size(15) == (964, 622)          # small graphs keep their old size
+    assert _canvas_size(5000) == _canvas_size(500) and _canvas_size(5000)[0] == CANVAS_MAX[0]
 
 
 def test_graph_edges_use_a_visible_colour(conn, tmp_path):
