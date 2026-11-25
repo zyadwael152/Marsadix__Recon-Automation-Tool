@@ -8,7 +8,7 @@ from marsadix.recon.resolver import parse_dnsx_json
 def test_depth_zero_discovers_root_once_without_recursing(monkeypatch):
     calls = []
 
-    async def fake_single(domain, api_keys):
+    async def fake_single(domain, api_keys, **kwargs):
         calls.append(domain)
         return {
             "api.example.com": ["subfinder"],
@@ -27,7 +27,7 @@ def test_depth_zero_discovers_root_once_without_recursing(monkeypatch):
 
 
 def test_root_target_is_kept_as_a_manual_asset(monkeypatch):
-    async def fake_single(domain, api_keys):
+    async def fake_single(domain, api_keys, **kwargs):
         return {"www.example.com": ["subfinder"]}
 
     monkeypatch.setattr(discovery, "_async_discover_single", fake_single)
@@ -40,7 +40,7 @@ def test_root_target_is_kept_as_a_manual_asset(monkeypatch):
 def test_recursion_requires_a_domain_label_boundary(monkeypatch):
     calls = []
 
-    async def fake_single(domain, api_keys):
+    async def fake_single(domain, api_keys, **kwargs):
         calls.append(domain)
         if domain == "example.com":
             return {"api.example.com": ["subfinder"], "evilexample.com": ["crt.sh"]}
