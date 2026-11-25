@@ -13,5 +13,5 @@ scope.txt
 outputs/
 *.bak*
 *:Zone.Identifier
-version_detect.py
+
 
