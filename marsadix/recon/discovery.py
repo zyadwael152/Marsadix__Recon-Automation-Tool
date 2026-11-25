@@ -193,12 +193,10 @@ async def _async_discover_single(domain: str, api_keys: dict, include_cli: bool 
     Run discovery sources against one domain.
 
     include_cli: subfinder / assetfinder / findomain (and amass only when
-                 MARSADIX_AMASS=1). Only on the root domain, once per scan.
-    include_domain_apis: AlienVault, VirusTotal and chaos answer per domain.
-                 Asking them again for every subdomain only triggers rate
-                 limits (AlienVault returned 429 on every extra call), so
-                 they run on the root domain only. crt.sh runs on every
-                 target because it returns nested names under each one.
+                 MARSADIX_AMASS=1).
+    include_domain_apis: AlienVault, VirusTotal and chaos.
+    Recursion runs every source on every target at every depth (both flags
+    stay True); the flags remain so a caller can still turn them off.
     """
     vt_key = api_keys.get("virustotal")
     chaos_key = api_keys.get("chaos")
@@ -279,9 +277,6 @@ async def _async_discover_recursive(domain: str, api_keys: dict, max_depth: int)
             break
 
         logger.info(f"[*] === Discovery depth {depth}/{effective_depth}: {len(targets_to_scan)} target(s) ===")
-        if depth > 1:
-            logger.info("[*] CLI enumerators and domain-level APIs already ran on the root domain; "
-                        "deeper levels use crt.sh only.")
 
         if len(targets_to_scan) > MAX_RECURSION_BATCH:
             dropped = len(targets_to_scan) - MAX_RECURSION_BATCH
@@ -291,11 +286,9 @@ async def _async_discover_recursive(domain: str, api_keys: dict, max_depth: int)
             toolstatus.record("recursion", "truncated", f"depth {depth}: {dropped} target(s) not expanded")
             targets_to_scan = set(sorted(targets_to_scan)[:MAX_RECURSION_BATCH])
 
-        # Root-only sources run at depth 1; deeper levels only ask crt.sh.
+        # Every source (CLI enumerators, domain APIs, crt.sh) runs on every target at every depth.
         tasks = [
-            _async_discover_single(t, api_keys,
-                                   include_cli=(depth == 1),
-                                   include_domain_apis=(depth == 1))
+            _async_discover_single(t, api_keys, include_cli=True, include_domain_apis=True)
             for t in sorted(targets_to_scan)
         ]
         batch_results = await asyncio.gather(*tasks)

@@ -105,3 +105,18 @@ def test_dnsx_parser_keeps_ipv4_and_ipv6_addresses():
         '{"host":"dual.example.com","a":["192.0.2.10"],"aaaa":["2001:db8::10"],"cname":[]}\n'
     )
     assert parsed["dual.example.com"]["ips"] == ["192.0.2.10", "2001:db8::10"]
+
+
+def test_every_source_runs_on_every_target_at_every_depth(monkeypatch):
+    calls = []
+
+    async def fake_single(domain, api_keys, include_cli=True, include_domain_apis=True):
+        calls.append((domain, include_cli, include_domain_apis))
+        if domain == "example.com":
+            return {"api.example.com": ["subfinder"]}
+        return {}
+
+    monkeypatch.setattr(discovery, "_async_discover_single", fake_single)
+    asyncio.run(discovery._async_discover_recursive("example.com", {}, 2))
+
+    assert calls == [("example.com", True, True), ("api.example.com", True, True)]
