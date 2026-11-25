@@ -629,14 +629,12 @@ def _scope_methodology_section(data: dict) -> str:
         (f" (scope file: <code>{_e(scan.get('scope_file'))}</code>)" if scan.get("scope_file") else "") + ".</p>"
     runs = data.get("tool_runs") or []
     bad = [r for r in runs if r.get("status") in ("failed", "timeout", "truncated")]
-    if not runs:
-        tools_html = "<p>No per-tool status was recorded for this scan.</p>"
-    else:
-        tools_html = ("<p>" + (f"<strong>{len(bad)} tool run(s) were incomplete</strong>: results from them may be missing. "
-                               if bad else "All recorded tool runs completed. ") + "</p>"
-                      "<table><thead><tr><th>Tool / source</th><th>Status</th><th>Detail</th></tr></thead><tbody>" +
-                      "".join(f"<tr><td>{_e(r.get('tool'))}</td><td>{_e(r.get('status'))}</td><td>{_e(r.get('detail'))}</td></tr>"
-                              for r in runs) + "</tbody></table>")
+    # One line, only when a tool failed, timed out or was cut off; nothing when every recorded run was fine.
+    tools_html = ""
+    if bad:
+        which = ", ".join(f"{_e(r.get('tool'))} ({_e(r.get('status'))})" for r in bad)
+        tools_html = (f"<h3>Tool warnings</h3><p><strong>{len(bad)} tool run(s) were incomplete</strong>: "
+                      f"results from them may be missing: {which}.</p>")
     skills = data.get("detection_skills") or []
     active = [k for k in skills if k["state"] == "active"]
     planned = [k for k in skills if k["state"] == "planned"]
@@ -653,7 +651,7 @@ def _scope_methodology_section(data: dict) -> str:
     <p>Mode <code>{_e(scan.get('mode', 'passive'))}</code> &middot; recursion depth {_e(scan.get('max_depth'))} &middot;
        rate limit {_e(scan.get('rate_limit') or 'default')} &middot; {'baseline scan' if scan.get('is_baseline') else 'tracked scan'}.</p>
     <h3>Detection skills</h3>{skills_html}
-    <h3>Tools and data sources</h3>{tools_html}
+    {tools_html}
   </section>"""
 
 
@@ -835,7 +833,7 @@ def _why_no_ports(data: dict) -> str:
     if out_scope:
         reasons.append(f"{len(out_scope)} host(s) are out of scope and were not scanned")
     reasons.append("no open port was found on the remaining hosts, or naabu / nmap were not available "
-                   "(see the tool status table under Scope &amp; methodology)")
+                   "(see the tool warning line under Scope &amp; methodology, if any)")
     return "<ul>" + "".join(f"<li>{r}</li>" for r in reasons) + "</ul>"
 
 

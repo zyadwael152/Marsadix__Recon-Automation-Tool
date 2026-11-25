@@ -123,7 +123,19 @@ def test_report_reads_tool_status_next_to_it(conn, tmp_path):
         json.dumps([{"tool": "subfinder", "status": "timeout", "detail": "after 600s"}]))
     generate_report(conn, "example.com", fmt="html", out_dir=str(tmp_path))
     page = next(tmp_path.glob("*.html")).read_text()
-    assert "incomplete" in page and "subfinder" in page
+    assert "1 tool run(s) were incomplete" in page and "subfinder (timeout)" in page
+    assert "Tools and data sources" not in page      # the table is gone, only the warning line remains
+
+
+def test_report_has_no_tool_line_when_every_tool_run_was_ok(conn, tmp_path):
+    s = _populated(conn)
+    (tmp_path / f"example.com_scan{s.id}_tools.json").write_text(
+        json.dumps([{"tool": "subfinder", "status": "ok", "detail": ""},
+                    {"tool": "httpx", "status": "ok", "detail": ""}]))
+    generate_report(conn, "example.com", fmt="html", out_dir=str(tmp_path))
+    page = next(tmp_path.glob("*.html")).read_text()
+    assert "tool run(s) were incomplete" not in page and "Tool warnings" not in page
+    assert "Tools and data sources" not in page and "<td>httpx</td>" not in page
 
 
 # ------------------------------------------------------------ skills registry
