@@ -99,6 +99,9 @@ def build_parser() -> argparse.ArgumentParser:
     g = sub.add_parser("graph", help="Knowledge Graph summary for a target")
     g.add_argument("target")
     g.add_argument("--scan-id", type=int, help="defaults to the latest scan")
+    g.add_argument("--out", metavar="FILE", help="interactive graph page (default: <output dir>/<target>_graph.html)")
+    g.add_argument("--no-open", action="store_true", help="write the page but do not open the browser")
+    g.add_argument("--no-html", action="store_true", help="text summary only, no interactive page")
 
     tm = sub.add_parser("timemachine", help="Attack Path Time Machine: how attack paths changed scan over scan")
     tm.add_argument("target")
@@ -261,8 +264,23 @@ def cmd_report(a, cfg: Config) -> int:
 
 def cmd_graph(a, cfg: Config) -> int:
     target = normalize_host(a.target) or a.target
-    return _db_command("marsadix.core.graph:run_graph", "graph", cfg,
-                       target=target, scan_id=a.scan_id)
+    rc = _db_command("marsadix.core.graph:run_graph", "graph", cfg,
+                     target=target, scan_id=a.scan_id)
+    if rc != 0 or a.no_html:
+        return rc
+    # Also write the interactive page and open it, so one command is enough.
+    from pathlib import Path
+    out = Path(a.out) if a.out else Path(cfg.output_dir) / f"{target}_graph.html"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    rc = _db_command("marsadix.monitor.graph_view:export_html", "graph page", cfg,
+                     target=target, scan_id=a.scan_id, out=str(out))
+    if rc == 0 and not a.no_open:
+        try:
+            import webbrowser
+            webbrowser.open(out.resolve().as_uri())
+        except Exception:                       # no browser (server / container): the path is printed
+            pass
+    return rc
 
 
 def cmd_timemachine(a, cfg: Config) -> int:

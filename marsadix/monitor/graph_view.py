@@ -162,6 +162,19 @@ def render(graph, title='Marsadix Knowledge Graph'):
             .replace('&', '\\u0026').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029'))
     return TEMPLATE.replace('__TITLE__', html.escape(title)).replace('__DATA__', data)
 
+def export_html(conn, target, scan_id=None, out='graph.html') -> int:
+    """Write the interactive page for `target` (latest scan unless scan_id) to `out`."""
+    row=(conn.execute('SELECT id FROM scans WHERE target=? ORDER BY id DESC LIMIT 1',(target,)).fetchone()
+         if scan_id is None else conn.execute('SELECT id FROM scans WHERE id=? AND target=?',(scan_id,target)).fetchone())
+    if row is None:
+        print('error: no matching scan'); return 1
+    graph=db.get_graph(conn,row['id'])
+    if not graph['nodes']:
+        build_graph(conn,row['id']);graph=db.get_graph(conn,row['id'])
+    Path(out).write_text(render(graph, 'Marsadix: '+target),encoding='utf-8')
+    print(f'\nInteractive graph: {Path(out).resolve()}')
+    return 0
+
 def main(argv=None):
     ap=argparse.ArgumentParser(description='Export interactive graph without network calls')
     ap.add_argument('target'); ap.add_argument('--db', default='marsadix.db'); ap.add_argument('--scan-id', type=int); ap.add_argument('--out', default='graph.html')
