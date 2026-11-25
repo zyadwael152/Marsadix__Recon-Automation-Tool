@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Recon, ASM and CVE monitoring"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["websockets>=12,<16"]
+dependencies = ["websockets>=12,<16", "packaging>=23"]
 
 [project.optional-dependencies]
 dev = ["pytest"]
