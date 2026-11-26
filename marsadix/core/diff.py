@@ -144,6 +144,7 @@ def run_stage(ctx) -> Optional[dict]:
     conn = ctx.conn
     target = ctx.target
     cur_id = ctx.scan.id
+    from ..alerts.asset_alerts import push as _push   # instant Discord + Telegram for asset changes
 
     # Integrity first: a broken scan must not rewrite the asset history. An empty or
     # partial result from a failed recon stage looks exactly like "everything
@@ -177,6 +178,7 @@ def run_stage(ctx) -> Optional[dict]:
             )
             if db.save_alert_if_new(conn, alert):
                 log.info("track: new asset alert queued for %s", host)
+                _push(conn, alert, "new_asset")
         for host in gone_hosts:
             log.info("track: asset no longer seen: %s", host)
             alert = Alert(
@@ -190,6 +192,7 @@ def run_stage(ctx) -> Optional[dict]:
             )
             if db.save_alert_if_new(conn, alert):
                 log.info("track: asset disappearance alert queued for %s", host)
+                _push(conn, alert, "removed_asset")
 
     prev = _previous_scan(conn, target, cur_id)
     if prev is None:
@@ -211,6 +214,7 @@ def run_stage(ctx) -> Optional[dict]:
         alert.dedup_key = f"{alert.dedup_key}|{port}"
         if db.save_alert_if_new(conn, alert):
             log.info("track: new port alert queued for %s", entry)
+            _push(conn, alert, "new_port")
 
 
 # --------------------------------------------------------------------------
