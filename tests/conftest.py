@@ -149,3 +149,9 @@ def _no_real_whatweb(monkeypatch):
     async def fake(urls, rate_limit=None, timeout=None):
         return []
     monkeypatch.setattr("marsadix.web.stage.run_whatweb", fake)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_asset_alerts(monkeypatch):
+    """Tests must never send real Discord/Telegram asset alerts. A successful send would also mark the alert delivered, so tests that read pending alerts would see none."""
+    monkeypatch.setattr("marsadix.alerts.asset_alerts.notify_asset", lambda *args, **kwargs: False)
