@@ -26,6 +26,7 @@ def build_lines(a: AlertPayload) -> List[str]:
         f"<b>{esc(truncate(a.title, 300))}</b>",
         f"<b>Priority:</b> {esc(a.priority_level.upper())} ({a.priority_score:.1f})" + ("  🔥 <b>KEV</b>" if a.kev else ""),
         f"<b>Technology:</b> {esc(truncate(tech, 200))}",
+        f"<b>Version:</b> {esc(a.version) if a.version else 'not detected - low confidence, verify manually'}",
         f"<b>CVSS:</b> {esc(fmt_score(a.cvss))}  <b>EPSS:</b> {esc(fmt_score(a.epss, 3))}  <b>Confidence:</b> {esc(a.confidence)}",
         f"<b>Description:</b> {esc(truncate(a.description, 600))}",
         f"<b>Remediation:</b> {esc(truncate(rem, 900))}",

@@ -23,7 +23,7 @@ def build_payload(a: AlertPayload) -> Dict:
     tech = " ".join(x for x in (a.technology or a.product, a.version) if x) or "-"
     fields = [
         _field("Host", a.host), _field("CVE", a.cve_id), _field("Technology", tech),
-        _field("Version", a.version or "unknown"), _field("CVSS", fmt_score(a.cvss)),
+        _field("Version", a.version or "not detected - low confidence, verify manually"), _field("CVSS", fmt_score(a.cvss)),
         _field("EPSS", fmt_score(a.epss, 3)), _field("KEV", "YES" if a.kev else "no"),
         _field("Confidence", a.confidence), _field("Priority", f"{a.priority_level.upper()} ({a.priority_score:.1f})"),
     ]
