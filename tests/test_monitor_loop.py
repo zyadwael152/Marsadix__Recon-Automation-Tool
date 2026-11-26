@@ -99,12 +99,12 @@ def _fake_watch(monkeypatch, seen):
                         lambda p: (lambda cfg, **kw: seen.update(kw) or 0) if p.endswith("scheduler:watch") else None)
 
 
-def test_plain_monitor_is_continuous_every_5_hours_and_alerts(monkeypatch, tmp_path):
+def test_plain_monitor_is_continuous_every_30_minutes_and_alerts(monkeypatch, tmp_path):
     from marsadix.cli import main
     seen = {}
     _fake_watch(monkeypatch, seen)
     assert main(["--no-banner", "--db", str(tmp_path / "t.db"), "monitor"]) == 0
-    assert seen == {"interval_hours": 5.0, "once": False, "dry_run": False, "send_alerts": True,
+    assert seen == {"interval_hours": 0.5, "once": False, "dry_run": False, "send_alerts": True,
                     "since": None, "all_cves": False, "channels": None}
 
 
