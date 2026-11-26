@@ -278,7 +278,7 @@ async def run_httpx(domains: List[str], rate_limit: Optional[int] = None,
 
     try:
         process = await asyncio.create_subprocess_exec(
-            "httpx", "-silent", "-json", "-td", "-server", *_rate_args(rate_limit),
+            "httpx", "-silent", "-json", "-td", "-server", "-timeout", "20", "-retries", "2", *_rate_args(rate_limit),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
