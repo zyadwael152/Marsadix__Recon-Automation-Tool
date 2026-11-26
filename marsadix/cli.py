@@ -71,8 +71,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--allow-injection", action="store_true",
                    help="explicit opt-in for injection-style checks (XSS/SQLi/SSTI probes)")
 
-    m = sub.add_parser("monitor", help="CVE monitor: sync the feeds, match them against your technologies and alert; repeats every --interval-hours (default 5)")
-    m.add_argument("--interval-hours", type=float, default=5.0, help="hours between cycles (default 5)")
+    m = sub.add_parser("monitor", help="CVE monitor: sync the feeds, match them against your technologies and alert; repeats every --interval-hours (default 0.5, i.e. every 30 minutes)")
+    m.add_argument("--interval-hours", type=float, default=0.5, help="hours between cycles (default 0.5 = 30 minutes)")
     m.add_argument("--once", action="store_true", help="run a single cycle and exit (--dry-run implies it)")
     m.add_argument("--dry-run", action="store_true", help="show matches, send nothing")
     m.add_argument("--since", metavar="ISO_DATE", help="override last sync time")

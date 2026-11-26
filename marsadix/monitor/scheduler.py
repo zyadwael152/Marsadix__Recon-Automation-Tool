@@ -1,5 +1,5 @@
 """Continuous CVE monitoring behind `marsadix monitor`: sync NVD/KEV/EPSS, match against the technologies in the
-database, alert - now, and then again every --interval-hours (default 5). Leave it running (tmux, nohup, systemd,
+database, alert - now, and then again every --interval-hours (default 0.5, i.e. every 30 minutes). Leave it running (tmux, nohup, systemd,
 Docker). A failing cycle is logged and the next one still runs; Ctrl+C stops it cleanly.
 `python -m marsadix.monitor.scheduler` does the same thing.
 """
@@ -15,7 +15,7 @@ from ..core.config import load_config
 from .runner import run
 
 log = logging.getLogger(__name__)
-DEFAULT_INTERVAL_HOURS = 5.0
+DEFAULT_INTERVAL_HOURS = 0.5   # 30 minutes
 
 
 def _post_sync():
@@ -69,7 +69,7 @@ def watch(config, interval_hours=DEFAULT_INTERVAL_HOURS, once=False, dry_run=Fal
             if once:
                 _say(f"cycle {n} finished (exit {rc})")
                 return rc
-            _say(f"cycle {n} finished (exit {rc}); next one in {interval_hours:g} h  (Ctrl+C to stop)")
+            _say(f"cycle {n} finished (exit {rc}); next one in {interval_hours * 60:g} min  (Ctrl+C to stop)")
             sleep(interval_hours * 3600)
     except KeyboardInterrupt:
         _say("monitor stopped")
