@@ -76,6 +76,10 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("--once", action="store_true", help="run a single cycle and exit (--dry-run implies it)")
     m.add_argument("--dry-run", action="store_true", help="show matches, send nothing")
     m.add_argument("--since", metavar="ISO_DATE", help="override last sync time")
+    m.add_argument("action", nargs="?", choices=["start", "stop", "status"],
+                   help="start / stop / status: run the monitors in the background (CVE monitor + CT monitor)")
+    m.add_argument("domain", nargs="?",
+                   help="with start: monitor only this domain's CT logs. Without it, every target in the database")
 
     # 🆕 R14: CT Log stream monitoring parser
     ct = sub.add_parser("ct-monitor", help="continuously monitor CT logs for new subdomains in real-time")
@@ -198,9 +202,29 @@ def _db_command(path: str, what: str, cfg: Config, **kwargs):
 
 def cmd_monitor(a, cfg: Config) -> int:
     """Sync NVD/KEV/EPSS, match the CVEs against the stored technologies and alert; then repeat every
-    --interval-hours (default 5). --once (or --dry-run) runs a single cycle. Leave it running (tmux / nohup / Docker)."""
+    --interval-hours (default 0.5). --once (or --dry-run) runs a single cycle. Leave it running (tmux / nohup / Docker)."""
     if a.interval_hours <= 0:
         print("--interval-hours must be positive", file=sys.stderr)
+        return 2
+    action = getattr(a, "action", None)
+    domain = getattr(a, "domain", None)
+    if action:
+        from marsadix.monitor import background
+        if action == "stop":
+            return background.stop(cfg)
+        if action == "status":
+            return background.status(cfg)
+        if domain:
+            host = valid_hostname(domain)
+            if not host:
+                print(f"invalid domain: {domain!r}", file=sys.stderr)
+                return 2
+            targets = [host]
+        else:
+            targets = [t for t in background.db_targets(cfg) if valid_hostname(t)]
+        return background.start(cfg, targets, a.interval_hours)
+    if domain:
+        print("a domain only goes with start, e.g. marsadix monitor start 0xnull.site", file=sys.stderr)
         return 2
     watch = load_callable("marsadix.monitor.scheduler:watch")
     if watch is None:
