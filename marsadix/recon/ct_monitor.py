@@ -6,11 +6,14 @@ SSL/TLS certificates in real-time. This is how you catch zero-days.
 import asyncio
 import json
 import logging
+import os
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-CERTSTREAM_URL = "wss://certstream.calidog.io/"
+# Source is configurable from .env (CERTSTREAM_URL). Default: a local certstream-server-go.
+CERTSTREAM_URL = os.environ.get("CERTSTREAM_URL", "ws://localhost:8080/")
+MAX_CONNECT_FAILURES = 5   # stop after this many failed connections in a row instead of retrying forever
 
 
 class BoundedSeen:
@@ -70,6 +73,15 @@ def _new_hosts_from_message(data, domain: str, seen: set) -> list:
     return out
 
 
+async def _alert_new_host(host: str) -> None:
+    """Instant Discord + Telegram alert. Runs in a thread so the websocket is never blocked; never raises."""
+    try:
+        from ..alerts.asset_alerts import notify_asset
+        await asyncio.to_thread(notify_asset, "new_asset", host, "Found via Certificate Transparency logs")
+    except Exception as e:
+        logger.warning("[-] Could not send CT alert for %s: %s", host, e)
+
+
 async def monitor_ct_logs(domain: str, output_file: Optional[str] = None):
     """Continuously monitor CT logs, reconnect iteratively, and write each host once."""
     try:
@@ -86,6 +98,7 @@ async def monitor_ct_logs(domain: str, output_file: Optional[str] = None):
     logger.info("[*] Starting continuous CT Log monitoring for: *.%s (R14)", domain)
     logger.info("[*] Listening to global certificate streams... Press Ctrl+C to stop.")
     seen = BoundedSeen()
+    failures = 0
     if output_file:
         try:
             with open(output_file, "r", encoding="utf-8") as existing:
@@ -98,6 +111,7 @@ async def monitor_ct_logs(domain: str, output_file: Optional[str] = None):
     while True:
         try:
             async with websockets.connect(CERTSTREAM_URL, ping_interval=20, ping_timeout=20) as ws:
+                failures = 0
                 while True:
                     try:
                         message = await ws.recv()
@@ -109,6 +123,7 @@ async def monitor_ct_logs(domain: str, output_file: Optional[str] = None):
 
                     for host in _new_hosts_from_message(data, domain, seen):
                         logger.info("[+] New CT asset: %s", host)
+                        await _alert_new_host(host)
                         if output_file:
                             try:
                                 with open(output_file, "a", encoding="utf-8") as f:
@@ -119,5 +134,10 @@ async def monitor_ct_logs(domain: str, output_file: Optional[str] = None):
             raise
         except Exception as e:
             logger.error("[-] CertStream connection lost (%s): %s", type(e).__name__, e)
-            logger.info("[*] Reconnecting in 5 seconds...")
+            failures += 1
+            if failures >= MAX_CONNECT_FAILURES:
+                logger.error("[-] CT source %s unreachable after %d attempts. Stopping CT monitor. "
+                             "Check the source or set CERTSTREAM_URL in .env.", CERTSTREAM_URL, failures)
+                return
+            logger.info("[*] Reconnecting in 5 seconds (attempt %d/%d)...", failures, MAX_CONNECT_FAILURES)
             await asyncio.sleep(5)
