@@ -40,6 +40,20 @@ _KNOWN = {
     "varnish":            ("varnish-cache", "varnish", "cache"),
     "redis":              ("redis", "redis", "database"),
     "elasticsearch":      ("elastic", "elasticsearch", "database"),
+    "react":              ("facebook", "react", "js-library"),
+    "next.js":            ("vercel", "next.js", "framework"),
+    "webpack":            ("webpack.js", "webpack", "js-library"),
+    "flask":              ("palletsprojects", "flask", "framework"),
+    "envoy":              ("envoyproxy", "envoy", "web-server"),
+    "angular":            ("angular", "angular", "framework"),
+    "angularjs":          ("angularjs", "angular.js", "framework"),
+    "spring framework":   ("vmware", "spring_framework", "framework"),
+    "openssh":            ("openbsd", "openssh", "application"),
+    "mysql":              ("oracle", "mysql", "database"),
+    "postgresql":         ("postgresql", "postgresql", "database"),
+    "nuxt":               ("nuxt", "nuxt", "framework"),
+    "nuxt.js":            ("nuxt", "nuxt", "framework"),
+    "ruby on rails":      ("rubyonrails", "rails", "framework"),
 }
 
 # characters allowed in a CPE 2.3 version field without escaping
